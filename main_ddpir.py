@@ -124,16 +124,15 @@ class Config:
             else:
                 setattr(self, k, v)
 
-def parse_args_and_config():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--opt", type=str, help="Path to option YMAL file.")
-    args = parser.parse_args()
-    # Load the YAML file
-    with open(args.opt, 'r') as file:
-        config = yaml.safe_load(file)
-    config = Config(config)
+
+def load_config_from_path(opt_path: str) -> "Config":
+    """Load and post-process a YAML config file."""
+
+    with open(opt_path, "r") as file:
+        raw = yaml.safe_load(file)
+    config = Config(raw)
     config.world_size = torch.cuda.device_count()
-    config.opt = args.opt
+    config.opt = opt_path
 
     config.noise_level_img = config.noise_level_img / 255. # noise level of noisy image
     # config.skip = config.num_train_timesteps // config.iter_num     # skip interval
@@ -169,14 +168,16 @@ def parse_args_and_config():
     return config
 
 
-def main():
+def parse_args_and_config() -> "Config":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--opt", type=str, help="Path to option YMAL file.")
+    args = parser.parse_args()
+    return load_config_from_path(args.opt)
 
-    # ----------------------------------------
-    # Preparation
-    # ----------------------------------------
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    config = parse_args_and_config()
+def run_with_config(config: "Config") -> None:
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     config.device = device
     L_paths = util.get_image_paths(config.L_path)
 
@@ -591,9 +592,18 @@ def main():
         ave_psnr_y_sf = sum(test_results_ave['psnr_y_sf']) / len(test_results_ave['psnr_y_sf'])
         logger.info(f'-----------> Average PSNR-Y of ({config.testset_name}) {ave_psnr_y_sf:.4f} dB')
     if config.calc_LPIPS:
-        ave_lpips_sf = sum(test_results_ave['lpips']) / len(test_results_ave['lpips'])
-        logger.info(f'-----------> Average LPIPS of ({config.testset_name}) {ave_lpips_sf:.4f}')
+        ave_lpips_sf = sum(test_results_ave["lpips"]) / len(
+            test_results_ave["lpips"]
+        )
+        logger.info(
+            f"-----------> Average LPIPS of ({config.testset_name}) {ave_lpips_sf:.4f}"
+        )
 
-if __name__ == '__main__':
+
+def main():
+    config = parse_args_and_config()
+    run_with_config(config)
+
+if __name__ == "__main__":
 
     main()

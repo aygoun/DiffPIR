@@ -61,6 +61,28 @@ python main_ddpir.py --opt configs/deblur.yaml # deblur
 python main_ddpir.py --opt configs/inpaint.yaml # inpainting
 ```
 
+### Comparison scripts (DiffPIR vs DPS and plug-and-play priors)
+
+For quick quantitative comparisons between DiffPIR and DPS-style sampling on the same settings:
+
+```bash
+# Super-resolution
+python compare_sr_methods.py --opt configs/sisr.yaml --methods diffpir dps_y0 dps_yt
+
+# Deblurring
+python compare_deblur_methods.py --opt configs/deblur.yaml --methods diffpir dps_y0 dps_yt
+
+# Inpainting
+python compare_inpaint_methods.py --opt configs/inpaint.yaml --methods diffpir dps_y0 dps_yt
+```
+
+Each script:
+- Reuses the core logic in `main_ddpir.py` via a shared `run_with_config` function.
+- Modifies `generate_mode` (`DiffPIR`, `DPS_y0`, `DPS_yt`) while keeping all other settings fixed.
+- Writes results under `results/` with method-specific `result_name` prefixes so runs do not overwrite each other.
+
+The `experiments` package also contains small utilities and placeholders for plug-and-play priors (e.g. a Gaussian baseline and a stub `DRUNetDenoiser`) that you can extend with a concrete DRUNet implementation if desired.
+
 ### Train Your Own Diffusion Models
 To train a new diffusion model, please follow [OpenAI Guided Diffusion](https://github.com/openai/guided-diffusion).
 
