@@ -1,0 +1,29 @@
+[project]
+name = "diffpir"
+version = "0.1.0"
+description = "DiffPIR project configured for uv and Python 3.11"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+  "opencv-contrib-python==4.9.0.80",
+  "opencv-python==4.9.0.80",
+  "opencv-python-headless==4.9.0.80",
+  "hdf5storage==0.1.19",
+  "blobfile==2.1.1",
+  "matplotlib==3.8.4",
+  "matplotlib-inline==0.1.6",
+  "scipy==1.11.4",
+  "lpips==0.1.4",
+  "torch==2.1.0",
+  "torchvision==0.16.0",
+  "torchaudio==2.1.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["guided_diffusion", "utils"]
+
+
