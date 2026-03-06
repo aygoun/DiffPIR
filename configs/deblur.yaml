@@ -1,40 +1,121 @@
-task: deblur
-seed: 42
+diffpir:
+  task: deblur
+  seed: 42
 
-noise_level_img: 0.05
-noise_level_model: noise_level_img
-model_name: diffusion_ffhq_10m
-testset_name: demo_test
-num_train_timesteps: 1000
-iter_num: 100
-iter_num_U: 1
-batch_size: 16
+  noise_level_img: 0.05
+  noise_level_model: noise_level_img
+  model_name: diffusion_ffhq_10m
+  testset_name: demo_test
+  num_train_timesteps: 1000
+  iter_num: 100
+  iter_num_U: 1
+  batch_size: 16
 
-save_L: true
-save_E: true
+  save_L: true
+  save_E: true
 
-lambda_: 2
-zeta: 0.25
-sub_1_analytic: true
-log_process: false
-ddim_sample: false
-model_output_type: pred_xstart
-generate_mode: DiffPIR
-skip_type: quad
-eta: 0
-guidance_scale: 1.0 # effective guidance scale
-n_channels: 3
-cwd: ""
+  lambda_: 2
+  zeta: 0.25
+  sub_1_analytic: true
+  log_process: false
+  ddim_sample: false
+  model_output_type: pred_xstart
+  generate_mode: DiffPIR
+  skip_type: quad
+  eta: 0
+  guidance_scale: 1.0 # effective guidance scale
+  n_channels: 3
+  cwd: ""
 
-calc_LPIPS: true
-beta_start: 0.0001
-beta_end: 0.02
+  calc_LPIPS: true
+  beta_start: 0.0001
+  beta_end: 0.02
 
-noise_init_img: max
-skip_noise_model_t: false
+  noise_init_img: max
+  skip_noise_model_t: false
 
-# deblur
-sf: 1
-use_DIY_kernel: true
-blur_mode: "Gaussian" # Gaussian; motion
-kernel_size: 61
+  # deblur
+  sf: 1
+  use_DIY_kernel: true
+  blur_mode: "Gaussian" # Gaussian; motion
+  kernel_size: 61
+
+pnp_drunet:
+  # Base configuration for PnP+DRUNet experiments.
+  # This file mirrors the structure of the other task configs (deblur/sisr)
+  # but adds a section for PnP-specific hyper‑parameters and DRUNet weights.
+
+  # -----------------------------------------------------------------------------
+  # Core experiment settings (used to build MethodConfig)
+  # -----------------------------------------------------------------------------
+
+  # Task can be "sr", "deblur", or "inpaint". For the current project we
+  # primarily use this as a deblurring baseline; adjust as needed.
+  task: deblur
+
+  # Name of the method in plots / registries
+  name: pnp_drunet
+
+  # For PnP we do not use the diffusion model; this field is still required by
+  # MethodConfig and is used only as a label.
+  generate_mode: pnp_drunet
+
+  # Global scalar hyper‑parameters forwarded to MethodConfig
+  lambda_: 1.0
+  zeta: 0.0
+
+  # Scale factor (sf=1 for deblurring, sf=4 for SR, etc.)
+  sf: 1
+
+  # -----------------------------------------------------------------------------
+  # Degradation model (kept consistent with DiffPIR deblur config)
+  # -----------------------------------------------------------------------------
+
+  noise_level_img: 0.05 # AWGN standard deviation on the observation (≈12.75/255)
+  noise_level_model: noise_level_img
+  blur_mode: "Gaussian" # "Gaussian" or "motion"
+  kernel_size: 61
+  kernel_std: 3.0
+
+  # -----------------------------------------------------------------------------
+  # PnP+DRUNet hyper‑parameters (map directly to cfg.extra in MethodConfig)
+  # -----------------------------------------------------------------------------
+
+  # Choose which prior to use in PnP. Set to "gaussian" to use the
+  # GaussianDenoiser baseline, or "drunet" to use the DRUNet prior below.
+  denoiser: drunet
+
+  # Iterative scheme parameters (DPIR uses 8; more can over-smooth)
+  num_iters: 8 # number of PnP iterations
+  step_size: 1.0 # gradient descent step size for data term
+  data_weight: 1.0 # relative weight of data fidelity
+
+  # Denoiser noise level schedule
+  denoiser_sigma: 0.05 # nominal noise level fed to the denoiser
+  sigma_schedule: constant # "constant" or "linear" (anneal sigma to 0)
+
+  # Fallback Gaussian denoiser parameters (used if denoiser: gaussian)
+  gaussian_kernel_size: 5
+  gaussian_sigma: 1.0
+
+  # ---------------------------------------------------------------------------
+  # DRUNet weights
+  # ---------------------------------------------------------------------------
+  # Pretrained DRUNet models are provided by the official DPIR repo:
+  #   https://github.com/cszn/DPIR
+  # A commonly used color model is available via:
+  #   https://github.com/cszn/DPIR/releases/download/v1.0/drunet_color.pth
+  #
+  # 1) Download that file and place it under `model_zoo/` in this project.
+  # Leave empty to load from Hugging Face (perckle/DPIR) by default.
+  # Set to a local path (e.g. model_zoo/drunet_color.safetensors) to override.
+  drunet_weights_path: ""
+
+  # ---------------------------------------------------------------------------
+  # Output and metrics
+  # ---------------------------------------------------------------------------
+  calc_LPIPS: true
+  save_L: true
+  save_E: true
+  clamp: true
+  output_root: "outputs"

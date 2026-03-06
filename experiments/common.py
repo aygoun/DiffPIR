@@ -23,9 +23,11 @@ class MethodConfig:
     extra: Dict[str, object] | None = None
 
     @staticmethod
-    def load_from_yaml(yaml_path: str) -> MethodConfig:
+    def load_from_yaml(yaml_path: str, method: str) -> MethodConfig:
+        print(f"Loading {method} from {yaml_path}")
         with open(yaml_path, "r") as f:
-            cfg = yaml.safe_load(f)
+            cfg_all = yaml.safe_load(f)
+            cfg = cfg_all[method]
         return MethodConfig(
             task=cfg["task"],
             generate_mode=cfg["generate_mode"],
