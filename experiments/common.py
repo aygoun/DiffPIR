@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Sequence
 import os
-
+import yaml
 import numpy as np
 import torch
 
@@ -14,14 +14,31 @@ from utils import utils_image as util
 class MethodConfig:
     """Configuration for a single restoration method run."""
 
-    name: str
     task: str  # "sr", "deblur", "inpaint"
     generate_mode: str  # "DiffPIR", "DPS_y0", "DPS_yt", etc.
     lambda_: float
     zeta: float
-    sf: int = 4
+    sf: int = 1
     # Optional extras are kept in a free-form dict to avoid a huge signature
     extra: Dict[str, object] | None = None
+
+    @staticmethod
+    def load_from_yaml(yaml_path: str) -> MethodConfig:
+        with open(yaml_path, "r") as f:
+            cfg = yaml.safe_load(f)
+        return MethodConfig(
+            task=cfg["task"],
+            generate_mode=cfg["generate_mode"],
+            lambda_=cfg["lambda_"],
+            zeta=cfg["zeta"],
+            sf=cfg["sf"],
+            # Extract all keys not part of the core MethodConfig and aggregate in extra
+            extra={
+                k: v
+                for k, v in cfg.items()
+                if k not in {"task", "generate_mode", "lambda_", "zeta", "sf"}
+            },
+        )
 
 
 @dataclass
@@ -37,7 +54,6 @@ class ImageResult:
 class RunResult:
     """Aggregated metrics over a dataset for one method."""
 
-    method: str
     task: str
     sf: int
     image_results: Dict[str, ImageResult]
@@ -98,9 +114,7 @@ def run_experiment(
         image_results[img_name] = method_fn(img_path, method_config)
 
     return RunResult(
-        method=method_config.name,
         task=method_config.task,
         sf=method_config.sf,
         image_results=image_results,
     )
-

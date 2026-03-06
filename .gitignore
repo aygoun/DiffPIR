@@ -17,3 +17,4 @@ main_ddpir_sisr_test.py
 main_ddpir_sisr_x0.py
 .DS_Store
 .venv
+outputs/
