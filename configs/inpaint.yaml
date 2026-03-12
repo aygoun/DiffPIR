@@ -25,7 +25,7 @@ diffpir:
   eta: 0.0
   guidance_scale: 1.0
   n_channels: 3
-  cwd: ''
+  cwd: ""
 
   calc_LPIPS: true
   beta_start: 0.0001
@@ -34,7 +34,7 @@ diffpir:
   # inpaint
   sf: 1
   load_mask: false
-  mask_name: 'gt_keep_masks/face/000000.png'
-  mask_type: 'random'   # box | random | both | extreme
+  mask_name: "gt_keep_masks/face/000000.png"
+  mask_type: "random" # box | random | both | extreme
   mask_len_range: [128, 129]
   mask_prob_range: [0.5, 0.5]

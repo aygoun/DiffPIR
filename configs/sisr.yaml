@@ -13,7 +13,7 @@ batch_size: 16
 save_L: true
 save_E: true
 
-lambda_: 1
+lambda_: 7.0
 zeta: 0.25
 sub_1_analytic: true
 log_process: false
@@ -24,7 +24,7 @@ skip_type: quad
 eta: 0
 guidance_scale: 1.0 # effective guidance scale
 n_channels: 3
-cwd: ''
+cwd: ""
 
 calc_LPIPS: true
 beta_start: 0.0001
@@ -32,7 +32,6 @@ beta_end: 0.02
 
 noise_init_img: max
 skip_noise_model_t: false
-
 
 # sr
 sf: 4
