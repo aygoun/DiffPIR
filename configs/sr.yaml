@@ -1,13 +1,13 @@
 diffpir:
-  task: inpaint
+  task: sr
   seed: 42
 
-  noise_level_img: 0.0
-  noise_level_model: 0.0
+  noise_level_img: 0.05       # 12.75 / 255
+  noise_level_model: 0.05
   model_name: diffusion_ffhq_10m
   testset_name: demo_test
   num_train_timesteps: 1000
-  iter_num: 20
+  iter_num: 100
   iter_num_U: 1
   batch_size: 16
 
@@ -15,7 +15,7 @@ diffpir:
   save_E: true
 
   lambda_: 1.0
-  zeta: 1.0
+  zeta: 0.1
   sub_1_analytic: true
   log_process: false
   ddim_sample: false
@@ -31,10 +31,9 @@ diffpir:
   beta_start: 0.0001
   beta_end: 0.02
 
-  # inpaint
-  sf: 1
-  load_mask: false
-  mask_name: 'gt_keep_masks/face/000000.png'
-  mask_type: 'random'   # box | random | both | extreme
-  mask_len_range: [128, 129]
-  mask_prob_range: [0.5, 0.5]
+  # sr
+  sf: 4
+  sr_mode: blur             # blur | cubic
+  classical_degradation: false
+  inIter: 1                 # IBP inner iterations (cubic mode only)
+  gamma: 0.01               # IBP step size (cubic mode only)
