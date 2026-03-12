@@ -40,6 +40,69 @@ diffpir:
   blur_mode: "Gaussian" # Gaussian; motion
   kernel_size: 61
 
+
+dps_y0:
+  task: deblur
+  name: dps_y0
+  seed: 42
+
+  noise_level_img: 0.05
+  noise_level_model: noise_level_img
+  model_name: diffusion_ffhq_10m
+  testset_name: demo_test
+  num_train_timesteps: 1000
+  batch_size: 16
+
+  save_L: true
+  save_E: true
+  output_root: "outputs"
+
+  # Core Method Configs
+  generate_mode: DPS_y0
+  lambda_: 0.1  # Controls the gradient step size for DPS
+  zeta: 0.0     # Required by MethodConfig (unused in standard DPS)
+  n_channels: 3
+  cwd: ""
+
+  calc_LPIPS: true
+  sf: 1
+  use_DIY_kernel: true
+  blur_mode: "Gaussian"
+  kernel_size: 61
+  kernel_std: 3.0
+
+
+dps_yt:
+  task: deblur
+  name: dps_yt
+  seed: 42
+
+  noise_level_img: 0.05
+  noise_level_model: noise_level_img
+  model_name: diffusion_ffhq_10m
+  testset_name: demo_test
+  num_train_timesteps: 1000
+  batch_size: 16
+
+  save_L: true
+  save_E: true
+  output_root: "outputs"
+
+  # Core Method Configs
+  generate_mode: DPS_yt
+  lambda_: 0.1  # Controls the gradient step size for DPS
+  zeta: 0.0     # Required by MethodConfig (unused in standard DPS)
+  n_channels: 3
+  cwd: ""
+
+  calc_LPIPS: true
+  sf: 1
+  use_DIY_kernel: true
+  blur_mode: "Gaussian"
+  kernel_size: 61
+  kernel_std: 3.0
+
+
 pnp_drunet:
   # Base configuration for PnP+DRUNet experiments.
   # This file mirrors the structure of the other task configs (deblur/sisr)
