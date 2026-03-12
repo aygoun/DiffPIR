@@ -48,8 +48,10 @@ class ImageResult:
     """Per-image metrics for a restoration method."""
 
     psnr: float
+    image_path: str
     psnr_y: float | None = None
     lpips: float | None = None
+    output_path: str | None = None
 
 
 @dataclass

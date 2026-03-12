@@ -538,8 +538,9 @@ def run_diffpir_deblur(img_path: str, cfg: MethodConfig) -> ImageResult:
     _save_outputs(
         img_E, img_L, method_out, img_name, ext, "diffpir", hp.save_E, hp.save_L, logger
     )
+    out_est = os.path.join(method_out, f"{img_name}_diffpir{ext}")
 
-    return ImageResult(psnr=float(psnr), lpips=lpips_score)
+    return ImageResult(psnr=float(psnr), image_path=img_path, lpips=lpips_score, output_path=out_est)
 
 
 def run_dps_deblur(
@@ -657,16 +658,18 @@ def run_pnp_drunet_deblur(img_path: str, cfg: MethodConfig) -> ImageResult:
     # Save outputs
     extra = cfg.extra or {}
     method_out = os.path.join(extra.get("output_root", "outputs"), "pnp_deblur")
+    suffix = f"pnp_{hp.denoiser}"
     _save_outputs(
         img_E,
         img_L,
         method_out,
         img_name,
         ext,
-        f"pnp_{hp.denoiser}",
+        suffix,
         hp.save_E,
         hp.save_L,
         logger,
     )
+    out_est = os.path.join(method_out, f"{img_name}_{suffix}{ext}")
 
-    return ImageResult(psnr=float(psnr), lpips=lpips_score)
+    return ImageResult(psnr=float(psnr), image_path=img_path, lpips=lpips_score, output_path=out_est)
