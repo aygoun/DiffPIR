@@ -108,7 +108,7 @@ class PnPDeblurHyperParams:
 
     # denoiser
     denoiser: str = "gaussian"  # "gaussian" or "drunet"
-    denoiser_sigma: Optional[float] = None  # if None -> use observation noise
+    denoiser_sigma: Optional[float] = 0.008  # terminal sigma for logspace schedule (~2/255)
     sigma_schedule: str = "constant"  # "constant" or "linear"
 
     # gaussian denoiser params (fallback)
@@ -540,7 +540,9 @@ def run_diffpir_deblur(img_path: str, cfg: MethodConfig) -> ImageResult:
     )
     out_est = os.path.join(method_out, f"{img_name}_diffpir{ext}")
 
-    return ImageResult(psnr=float(psnr), image_path=img_path, lpips=lpips_score, output_path=out_est)
+    return ImageResult(
+        psnr=float(psnr), image_path=img_path, lpips=lpips_score, output_path=out_est
+    )
 
 
 def run_dps_deblur(
@@ -581,7 +583,7 @@ def run_dps_deblur(
             num_channels=128,
             num_res_blocks=1,
             attention_resolutions="16",
-            use_checkpoint=False
+            use_checkpoint=False,
         )
         if hp.model_name == "diffusion_ffhq_10m"
         else dict(
@@ -589,7 +591,7 @@ def run_dps_deblur(
             num_channels=256,
             num_res_blocks=2,
             attention_resolutions="8,16,32",
-            use_checkpoint=False
+            use_checkpoint=False,
         )
     )
     args = utils_model.create_argparser(model_config).parse_args([])
@@ -605,6 +607,7 @@ def run_dps_deblur(
     loss_fn_vgg = None
     if hp.calc_LPIPS:
         import lpips
+
         loss_fn_vgg = lpips.LPIPS(net="vgg").to(device)
 
     # 3. Image + degradation loading
@@ -618,7 +621,9 @@ def run_dps_deblur(
 
     # 4. Build Forward Operator (A) for DPS Data Consistency
     # Adjust kernel shape for depthwise 2D convolution over 3 channels
-    k_tensor = torch.tensor(k, device=device, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+    k_tensor = (
+        torch.tensor(k, device=device, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+    )
     k_tensor = k_tensor.repeat(3, 1, 1, 1)
 
     def linear_operator(x_hat):
@@ -627,7 +632,9 @@ def run_dps_deblur(
         x_0_1 = x_hat / 2.0 + 0.5
         pad_sz = k.shape[0] // 2
         # Use circular padding to mimic scipy's mode="wrap"
-        x_pad = torch.nn.functional.pad(x_0_1, (pad_sz, pad_sz, pad_sz, pad_sz), mode='circular')
+        x_pad = torch.nn.functional.pad(
+            x_0_1, (pad_sz, pad_sz, pad_sz, pad_sz), mode="circular"
+        )
         return torch.nn.functional.conv2d(x_pad, k_tensor, groups=3)
 
     # Initialize x at timestep T
@@ -636,8 +643,10 @@ def run_dps_deblur(
     logger.info("Starting DPS reverse diffusion (%d steps)", hp.num_train_timesteps)
 
     # 5. Reverse Diffusion Loop (Inspired by tp9 notebook)
-    for i, t_val in tqdm(enumerate(reversed(range(hp.num_train_timesteps))), desc="DPS Deblurring"):
-        
+    for i, t_val in tqdm(
+        enumerate(reversed(range(hp.num_train_timesteps))), desc="DPS Deblurring"
+    ):
+
         # We need gradients flowing back to xt to compute the data consistency step
         xt = xt.requires_grad_()
         t_tensor = torch.tensor([t_val], device=device)
@@ -645,46 +654,55 @@ def run_dps_deblur(
         # 5a. Unet Prediction
         model_out = model(xt, t_tensor)
         eps = model_out[:, :3, :, :]
-        
-        # Calculate predicted clean image (xhat_0)
-        xhat = (1.0 / sqrt_alphas_cumprod[t_val]) * xt - (sqrt_1m_alphas_cumprod[t_val] / sqrt_alphas_cumprod[t_val]) * eps
 
-       # 5b. Data consistency (L2 Loss & Gradient)
+        # Calculate predicted clean image (xhat_0)
+        xhat = (1.0 / sqrt_alphas_cumprod[t_val]) * xt - (
+            sqrt_1m_alphas_cumprod[t_val] / sqrt_alphas_cumprod[t_val]
+        ) * eps
+
+        # 5b. Data consistency (L2 Loss & Gradient)
         if mode == "DPS_y0":
             # Standard DPS: Compare predicted clean image (mapped to [0,1]) to clean measurement
             target_x = xhat
-            loss = torch.sum((linear_operator(target_x) - y)**2)
+            loss = torch.sum((linear_operator(target_x) - y) ** 2)
 
         elif mode == "DPS_yt":
             # 1. Create a pure convolution operator (without the [-1,1] to [0,1] shift)
             # This allows us to accurately scale the noise in the raw diffusion space
             pad_sz = k.shape[0] // 2
+
             def pure_conv(tensor):
-                x_pad = torch.nn.functional.pad(tensor, (pad_sz, pad_sz, pad_sz, pad_sz), mode='circular')
+                x_pad = torch.nn.functional.pad(
+                    tensor, (pad_sz, pad_sz, pad_sz, pad_sz), mode="circular"
+                )
                 return torch.nn.functional.conv2d(x_pad, k_tensor, groups=3)
-            
+
             # 2. Scale the clean measurement 'y' to the [-1, 1] diffusion space
-            y_scaled = y * 2.0 - 1.0 
-            
+            y_scaled = y * 2.0 - 1.0
+
             # 3. Construct the consistent noisy measurement y_t
             # THE FIX: Use the model's own predicted noise (eps) instead of random noise.
             # We detach it because y_t is our fixed target for this step.
             noise_y = pure_conv(eps.detach())
-            y_t = (sqrt_alphas_cumprod[t_val] * y_scaled) + (sqrt_1m_alphas_cumprod[t_val] * noise_y)
-            
+            y_t = (sqrt_alphas_cumprod[t_val] * y_scaled) + (
+                sqrt_1m_alphas_cumprod[t_val] * noise_y
+            )
+
             # 4. Compare the purely blurred noisy image to the aligned noisy measurement
             pred_yt = pure_conv(xt)
-            loss = torch.sum((pred_yt - y_t)**2)
+            loss = torch.sum((pred_yt - y_t) ** 2)
 
         grad_l2 = torch.autograd.grad(outputs=loss, inputs=xt)[0]
 
         # 5c. Standard DDPM backward step (mu)
-        mu = (1.0 / torch.sqrt(alphas[t_val])) * (xt - (betas[t_val] / torch.sqrt(betabar[t_val])) * eps)
+        mu = (1.0 / torch.sqrt(alphas[t_val])) * (
+            xt - (betas[t_val] / torch.sqrt(betabar[t_val])) * eps
+        )
 
         # 5d. DPS Gradient Correction
         # The scaling factor zeta_t is adapted directly from the notebook
         zetat = 0.1 * torch.pow(loss.detach(), -0.5) if loss.item() > 0 else 0.0
-        
+
         if t_val > 0:
             noise = torch.randn_like(xt) * torch.sqrt(betas[t_val])
         else:
@@ -696,13 +714,13 @@ def run_dps_deblur(
     # 6. Post-processing and Metrics
     x_0 = xt / 2.0 + 0.5
     x_0 = x_0.clamp(0.0, 1.0)
-    
+
     logger.info("Reverse diffusion finished for %s", img_name)
 
     img_E = util.tensor2uint(x_0)
     psnr = util.calculate_psnr(img_E, img_H, border=hp.border)
     lpips_score = _compute_lpips(loss_fn_vgg, x_0, img_H, device)
-    
+
     logger.info(
         "Results | img=%s | PSNR=%.3f dB | LPIPS=%s",
         img_name,
@@ -714,11 +732,21 @@ def run_dps_deblur(
     extra = cfg.extra or {}
     method_out = os.path.join(extra.get("output_root", "outputs"), f"dps_{mode}_deblur")
     _save_outputs(
-        img_E, img_L, method_out, img_name, ext, f"dps_{mode}", hp.save_E, hp.save_L, logger
+        img_E,
+        img_L,
+        method_out,
+        img_name,
+        ext,
+        f"dps_{mode}",
+        hp.save_E,
+        hp.save_L,
+        logger,
     )
     out_est = os.path.join(method_out, f"{img_name}_dps_{mode}{ext}")
 
-    return ImageResult(psnr=float(psnr), image_path=img_path, lpips=lpips_score, output_path=out_est)
+    return ImageResult(
+        psnr=float(psnr), image_path=img_path, lpips=lpips_score, output_path=out_est
+    )
 
 
 def run_pnp_drunet_deblur(img_path: str, cfg: MethodConfig) -> ImageResult:
@@ -781,7 +809,7 @@ def run_pnp_drunet_deblur(img_path: str, cfg: MethodConfig) -> ImageResult:
         )
         / 255.0
     )
-    rhos = [(sigma_obs**2) / (s**2) / 3.0 for s in sigma_schedule]
+    rhos = [(sigma_obs**2) / (s**2) for s in sigma_schedule]
     rhos = torch.tensor(rhos, device=device, dtype=torch.float32)
 
     # FFT pre-computation for analytic data step (sf=1 for deblur)
@@ -792,11 +820,11 @@ def run_pnp_drunet_deblur(img_path: str, cfg: MethodConfig) -> ImageResult:
     x = y.clone()
 
     for it in tqdm(range(hp.num_iters), desc="PnP Deblurring"):
-        # Data step: analytic FFT solution (DPIR-style) instead of gradient descent
+        # Step 1: Data step (analytic FFT solution)
         tau = rhos[it].float().repeat(1, 1, 1, 1)
         x = sr.data_solution(x.float(), FB, FBC, F2B, FBFy, tau, deblur_sf)
 
-        # Prior step: denoiser
+        # Step 2: Prior (denoiser) step — output of this step feeds back as x
         sigma_it = float(sigma_schedule[it])
         x = denoiser(x, sigma=sigma_it)
 
@@ -838,4 +866,6 @@ def run_pnp_drunet_deblur(img_path: str, cfg: MethodConfig) -> ImageResult:
     )
     out_est = os.path.join(method_out, f"{img_name}_{suffix}{ext}")
 
-    return ImageResult(psnr=float(psnr), image_path=img_path, lpips=lpips_score, output_path=out_est)
+    return ImageResult(
+        psnr=float(psnr), image_path=img_path, lpips=lpips_score, output_path=out_est
+    )

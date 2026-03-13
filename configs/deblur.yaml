@@ -148,13 +148,15 @@ pnp_drunet:
   # GaussianDenoiser baseline, or "drunet" to use the DRUNet prior below.
   denoiser: drunet
 
-  # Iterative scheme parameters (DPIR uses 8; more can over-smooth)
-  num_iters: 8 # number of PnP iterations
+  # Iterative scheme parameters
+  num_iters: 50 # number of PnP iterations (DPIR quality: 200, fast: 8)
   step_size: 1.0 # gradient descent step size for data term
   data_weight: 1.0 # relative weight of data fidelity
 
   # Denoiser noise level schedule
-  denoiser_sigma: 0.05 # nominal noise level fed to the denoiser
+  # Terminal sigma for the logspace schedule (model_sigma_1=49/255 → denoiser_sigma).
+  # DPIR uses ~2/255≈0.008; 0.05 is too high and causes heavy smoothing.
+  denoiser_sigma: 0.008 # nominal noise level fed to the denoiser at the last iteration
   sigma_schedule: constant # "constant" or "linear" (anneal sigma to 0)
 
   # Fallback Gaussian denoiser parameters (used if denoiser: gaussian)

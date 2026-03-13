@@ -38,3 +38,36 @@ diffpir:
   mask_type: "random" # box | random | both | extreme
   mask_len_range: [128, 129]
   mask_prob_range: [0.5, 0.5]
+
+
+pnp_drunet:
+  task: inpaint
+  name: pnp_drunet
+  generate_mode: pnp_drunet
+
+  lambda_: 1.0
+  zeta: 0.0
+  sf: 1
+
+  # Degradation (kept consistent with DiffPIR inpaint config)
+  noise_level_img: 0.0
+  load_mask: false
+  mask_name: "gt_keep_masks/face/000000.png"
+  mask_type: "random"
+  mask_len_range: [128, 129]
+  mask_prob_range: [0.5, 0.5]
+
+  # PnP hyper-parameters
+  denoiser: drunet
+  num_iters: 50
+  denoiser_sigma: 0.008
+  gaussian_kernel_size: 5
+  gaussian_sigma: 1.0
+  drunet_weights_path: ""
+
+  # Output and metrics
+  calc_LPIPS: true
+  save_L: true
+  save_E: true
+  clamp: true
+  output_root: "outputs"

@@ -27,6 +27,7 @@ from utils import utils_model
 from utils.utils_inpaint import mask_generator
 
 from .common import ImageResult, MethodConfig
+from .pnp_priors import GaussianDenoiser, DRUNetDenoiser, Denoiser
 
 
 # ===========================================================================
@@ -78,8 +79,36 @@ class DiffPIRInpaintHyperParams:
     sf: int = 1
 
 
+@dataclass
+class PnPInpaintHyperParams:
+    """
+    Hyper-parameters for a PnP inpainting baseline.
+
+    Uses a generic denoiser prior (Gaussian smoothing or DRUNet) and a
+    closed-form pixel-space data step enforcing consistency on known pixels.
+    """
+
+    num_iters: int = 50
+
+    # denoiser
+    denoiser: str = "gaussian"  # "gaussian" or "drunet"
+    denoiser_sigma: Optional[float] = None  # if None -> use observation noise
+    gaussian_kernel_size: int = 5
+    gaussian_sigma: float = 1.0
+
+    # drunet
+    drunet_weights_path: str = ""
+
+    # output / metrics
+    calc_LPIPS: bool = True
+    border: int = 0
+    save_L: bool = True
+    save_E: bool = True
+    clamp: bool = True
+
+
 # ===========================================================================
-# Hyper-parameter builder
+# Hyper-parameter builders
 # ===========================================================================
 
 
@@ -113,6 +142,28 @@ def _build_hparams_from_cfg(cfg: MethodConfig) -> DiffPIRInpaintHyperParams:
     if hp.noise_level_model is None:
         hp.noise_level_model = hp.noise_level_img
 
+    return hp
+
+
+def _build_pnp_hparams_from_cfg(cfg: MethodConfig) -> PnPInpaintHyperParams:
+    """Create PnP hyper-parameter object, allowing overrides through `cfg.extra`."""
+    extra: Dict[str, Any] = cfg.extra or {}
+    hp = PnPInpaintHyperParams()
+    for key in [
+        "num_iters",
+        "denoiser",
+        "denoiser_sigma",
+        "gaussian_kernel_size",
+        "gaussian_sigma",
+        "drunet_weights_path",
+        "calc_LPIPS",
+        "border",
+        "save_L",
+        "save_E",
+        "clamp",
+    ]:
+        if key in extra:
+            setattr(hp, key, extra[key])
     return hp
 
 
@@ -476,11 +527,141 @@ def run_pnp_drunet_inpaint(img_path: str, cfg: MethodConfig) -> ImageResult:
     """
     Plug-and-play inpainting runner using DRUNet or another `Denoiser` prior.
 
-    Recommended design:
-    - Construct a DRUNetDenoiser (or other denoiser) instance.
-    - Implement an iterative PnP scheme:
-      * data step enforcing consistency on known pixels
-      * prior step using the denoiser
-    - Return an `ImageResult` with metrics.
+    Uses a DPIR-style HQS iteration with:
+      - Prior step: denoiser (DRUNet or Gaussian)
+      - Data step: closed-form proximal on known pixels
+        x = (mask * y + rho * x_denoised) / (mask + rho)
     """
-    raise NotImplementedError("run_pnp_drunet_inpaint is not implemented yet.")
+    assert cfg.task == "inpaint", f"PnP inpaint expects task='inpaint', got {cfg.task!r}"
+
+    deg = _build_hparams_from_cfg(cfg)
+    hp = _build_pnp_hparams_from_cfg(cfg)
+
+    img_name, ext = os.path.splitext(os.path.basename(img_path))
+    logger = _make_logger(f"pnp_inpaint.{img_name}")
+
+    logger.info(
+        "Starting PnP inpainting | img=%s | denoiser=%s | iters=%d | mask=%s | noise=%.4f",
+        img_name,
+        hp.denoiser,
+        hp.num_iters,
+        deg.mask_type,
+        deg.noise_level_img,
+    )
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Image, mask and degraded observation
+    n_channels = 3
+    logger.info("Loading ground-truth image from %s", img_path)
+    img_H = util.imread_uint(img_path, n_channels=n_channels)
+
+    mask_np = _build_mask(deg, img_H, logger)
+    img_L, y_diffusion, mask_tensor = _make_inpaint_observation(
+        img_H, mask_np, deg.noise_level_img, device, logger
+    )
+
+    # Work in [0, 1] space: convert y from [-1, 1] back to [0, 1]
+    y = y_diffusion / 2 + 0.5
+
+    # Denoiser selection
+    denoiser: Denoiser
+    if hp.denoiser.lower() == "drunet":
+        denoiser = DRUNetDenoiser(weights_path=str(hp.drunet_weights_path))
+        logger.info("Using DRUNet denoiser from %s", hp.drunet_weights_path)
+    else:
+        denoiser = GaussianDenoiser(
+            kernel_size=int(hp.gaussian_kernel_size), sigma=float(hp.gaussian_sigma)
+        )
+        logger.info(
+            "Using Gaussian denoiser (kernel=%d, sigma=%.2f)",
+            hp.gaussian_kernel_size,
+            hp.gaussian_sigma,
+        )
+
+    # DPIR-style rho/sigma schedule (logspace from modelSigma1 to modelSigma2)
+    sigma_obs = max(0.255 / 255.0, float(deg.noise_level_img))
+    model_sigma_2 = (
+        float(hp.denoiser_sigma)
+        if hp.denoiser_sigma is not None
+        else float(deg.noise_level_img)
+    )
+    model_sigma_1 = 49.0
+    sigma_schedule = (
+        np.logspace(
+            np.log10(model_sigma_1), np.log10(max(model_sigma_2 * 255.0, 0.01)), hp.num_iters
+        )
+        / 255.0
+    )
+    rhos = [(sigma_obs ** 2) / (s ** 2) for s in sigma_schedule]
+    rhos = torch.tensor(rhos, device=device, dtype=torch.float32)
+
+    # Fill unknown pixels with the mean of known pixels so DRUNet gets
+    # a natural-looking image from the very first iteration rather than an
+    # image with hard zeros in 50 % of pixels.
+    x = y.clone()
+    unknown_mask = mask_tensor < 0.5
+    if unknown_mask.any() and (~unknown_mask).any():
+        known_mean = float(y[~unknown_mask].mean())
+        x = torch.where(unknown_mask, torch.full_like(x, known_mean), x)
+
+    # For zero (or near-zero) observation noise use a hard constraint:
+    # after each denoiser step we force known pixels exactly back to y.
+    # This avoids rho ≈ 0 letting denoiser artifacts bleed into known pixels.
+    use_hard_constraint = float(deg.noise_level_img) < 1e-6
+
+    for it in tqdm(range(hp.num_iters), desc="PnP Inpainting"):
+        # Step 1: Prior (denoiser) step
+        sigma_it = float(sigma_schedule[it])
+        x = denoiser(x, sigma=sigma_it)
+
+        # Step 2: Data step
+        if use_hard_constraint:
+            # Exact replacement of known pixels — equivalent to rho → ∞
+            x = x * (1.0 - mask_tensor) + y * mask_tensor
+        else:
+            # Soft proximal: x = (mask * y + rho * x) / (mask + rho)
+            rho = rhos[it].float()
+            x = (mask_tensor * y + rho * x) / (mask_tensor + rho)
+
+        if hp.clamp:
+            x = x.clamp(0.0, 1.0)
+
+    # Metrics
+    loss_fn_vgg = None
+    if hp.calc_LPIPS:
+        import lpips
+
+        loss_fn_vgg = lpips.LPIPS(net="vgg").to(device)
+
+    img_E = util.tensor2uint(x)
+    psnr = util.calculate_psnr(img_E, img_H, border=int(hp.border))
+    lpips_score = _compute_lpips(loss_fn_vgg, x, img_H, device)
+
+    logger.info(
+        "Results | img=%s | PSNR=%.3f dB | LPIPS=%s",
+        img_name,
+        psnr,
+        f"{lpips_score:.4f}" if lpips_score is not None else "N/A",
+    )
+
+    # Save outputs
+    extra = cfg.extra or {}
+    method_out = os.path.join(extra.get("output_root", "outputs"), "pnp_inpaint")
+    suffix = f"pnp_{hp.denoiser}"
+    _save_outputs(
+        img_E,
+        img_L,
+        method_out,
+        img_name,
+        ext,
+        suffix,
+        hp.save_E,
+        hp.save_L,
+        logger,
+    )
+    out_est = os.path.join(method_out, f"{img_name}_{suffix}{ext}")
+
+    return ImageResult(
+        psnr=float(psnr), image_path=img_path, lpips=lpips_score, output_path=out_est
+    )
