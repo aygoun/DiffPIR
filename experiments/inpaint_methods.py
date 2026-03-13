@@ -27,7 +27,7 @@ from utils import utils_model
 from utils.utils_inpaint import mask_generator
 
 from .common import ImageResult, MethodConfig
-from .pnp_priors import GaussianDenoiser, DRUNetDenoiser, Denoiser
+from .pnp_priors import GaussianDenoiser, DRUNetDenoiser, DiffBIRDenoiser, Denoiser
 
 
 # ===========================================================================
@@ -91,13 +91,16 @@ class PnPInpaintHyperParams:
     num_iters: int = 50
 
     # denoiser
-    denoiser: str = "gaussian"  # "gaussian" or "drunet"
+    denoiser: str = "gaussian"  # "gaussian", "drunet", or "diffbir"
     denoiser_sigma: Optional[float] = None  # if None -> use observation noise
     gaussian_kernel_size: int = 5
     gaussian_sigma: float = 1.0
 
     # drunet
     drunet_weights_path: str = ""
+
+    # diffbir — leave empty to download general_swinir_v1.ckpt from lxq007/DiffBIR automatically
+    diffbir_weights_path: str = ""
 
     # output / metrics
     calc_LPIPS: bool = True
@@ -156,6 +159,7 @@ def _build_pnp_hparams_from_cfg(cfg: MethodConfig) -> PnPInpaintHyperParams:
         "gaussian_kernel_size",
         "gaussian_sigma",
         "drunet_weights_path",
+        "diffbir_weights_path",
         "calc_LPIPS",
         "border",
         "save_L",
@@ -312,7 +316,9 @@ def run_diffpir_inpaint(img_path: str, cfg: MethodConfig) -> ImageResult:
     - returns PSNR and LPIPS wrapped in `ImageResult`
     """
 
-    assert cfg.task == "inpaint", f"DiffPIR inpaint expects task='inpaint', got {cfg.task!r}"
+    assert (
+        cfg.task == "inpaint"
+    ), f"DiffPIR inpaint expects task='inpaint', got {cfg.task!r}"
     assert cfg.generate_mode == "DiffPIR", "run_diffpir_inpaint is specific to DiffPIR."
 
     hp = _build_hparams_from_cfg(cfg)
@@ -377,6 +383,7 @@ def run_diffpir_inpaint(img_path: str, cfg: MethodConfig) -> ImageResult:
     loss_fn_vgg = None
     if hp.calc_LPIPS:
         import lpips
+
         loss_fn_vgg = lpips.LPIPS(net="vgg").to(device)
 
     # Image, mask and degraded observation
@@ -394,7 +401,7 @@ def run_diffpir_inpaint(img_path: str, cfg: MethodConfig) -> ImageResult:
     sqrt_alpha_effective = sqrt_alphas_cumprod[t_start] / sqrt_alphas_cumprod[t_y]
     x = sqrt_alpha_effective * y + torch.sqrt(
         sqrt_1m_alphas_cumprod[t_start] ** 2
-        - sqrt_alpha_effective ** 2 * sqrt_1m_alphas_cumprod[t_y] ** 2
+        - sqrt_alpha_effective**2 * sqrt_1m_alphas_cumprod[t_y] ** 2
     ) * torch.randn_like(y)
 
     # Pre-compute sigmas / rhos
@@ -403,7 +410,7 @@ def run_diffpir_inpaint(img_path: str, cfg: MethodConfig) -> ImageResult:
         sigmas.append(reduced_alpha_cumprod[hp.num_train_timesteps - 1 - i])
         sk = sqrt_1m_alphas_cumprod[i] / sqrt_alphas_cumprod[i]
         sigma_ks.append(sk)
-        rhos.append(cfg.lambda_ * (sigma ** 2) / (sk ** 2))
+        rhos.append(cfg.lambda_ * (sigma**2) / (sk**2))
     rhos = torch.tensor(rhos).to(device)
     sigmas = torch.tensor(sigmas).to(device)
 
@@ -414,7 +421,7 @@ def run_diffpir_inpaint(img_path: str, cfg: MethodConfig) -> ImageResult:
         if skip > 1:
             seq.append(hp.num_train_timesteps - 1)
     elif hp.skip_type == "quad":
-        seq = np.sqrt(np.linspace(0, hp.num_train_timesteps ** 2, hp.iter_num))
+        seq = np.sqrt(np.linspace(0, hp.num_train_timesteps**2, hp.iter_num))
         seq = [int(s) for s in list(seq)]
         seq[-1] = seq[-1] - 1
     else:
@@ -463,7 +470,7 @@ def run_diffpir_inpaint(img_path: str, cfg: MethodConfig) -> ImageResult:
                     sqrt_alphas_cumprod[t_im1] * x0
                     + np.sqrt(1 - cfg.zeta)
                     * (
-                        torch.sqrt(sqrt_1m_alphas_cumprod[t_im1] ** 2 - eta_sigma ** 2)
+                        torch.sqrt(sqrt_1m_alphas_cumprod[t_im1] ** 2 - eta_sigma**2)
                         * eps
                         + eta_sigma * torch.randn_like(x)
                     )
@@ -479,7 +486,7 @@ def run_diffpir_inpaint(img_path: str, cfg: MethodConfig) -> ImageResult:
                 sqrt_ae = sqrt_alphas_cumprod[t_i] / sqrt_alphas_cumprod[t_im1]
                 x = sqrt_ae * x + torch.sqrt(
                     sqrt_1m_alphas_cumprod[t_i] ** 2
-                    - sqrt_ae ** 2 * sqrt_1m_alphas_cumprod[t_im1] ** 2
+                    - sqrt_ae**2 * sqrt_1m_alphas_cumprod[t_im1] ** 2
                 ) * torch.randn_like(x)
 
         x_0 = x / 2 + 0.5
@@ -510,10 +517,14 @@ def run_diffpir_inpaint(img_path: str, cfg: MethodConfig) -> ImageResult:
     )
     out_est = os.path.join(method_out, f"{img_name}_diffpir{ext}")
 
-    return ImageResult(psnr=float(psnr), image_path=img_path, lpips=lpips_score, output_path=out_est)
+    return ImageResult(
+        psnr=float(psnr), image_path=img_path, lpips=lpips_score, output_path=out_est
+    )
 
 
-def run_dps_inpaint(img_path: str, cfg: MethodConfig, mode: str = "DPS_y0") -> ImageResult:
+def run_dps_inpaint(
+    img_path: str, cfg: MethodConfig, mode: str = "DPS_y0"
+) -> ImageResult:
     """
     Single-image DPS inpainting runner (to be implemented).
 
@@ -523,7 +534,7 @@ def run_dps_inpaint(img_path: str, cfg: MethodConfig, mode: str = "DPS_y0") -> I
     raise NotImplementedError("run_dps_inpaint is not implemented yet.")
 
 
-def run_pnp_drunet_inpaint(img_path: str, cfg: MethodConfig) -> ImageResult:
+def run_pnp_inpaint(img_path: str, cfg: MethodConfig) -> ImageResult:
     """
     Plug-and-play inpainting runner using DRUNet or another `Denoiser` prior.
 
@@ -532,7 +543,9 @@ def run_pnp_drunet_inpaint(img_path: str, cfg: MethodConfig) -> ImageResult:
       - Data step: closed-form proximal on known pixels
         x = (mask * y + rho * x_denoised) / (mask + rho)
     """
-    assert cfg.task == "inpaint", f"PnP inpaint expects task='inpaint', got {cfg.task!r}"
+    assert (
+        cfg.task == "inpaint"
+    ), f"PnP inpaint expects task='inpaint', got {cfg.task!r}"
 
     deg = _build_hparams_from_cfg(cfg)
     hp = _build_pnp_hparams_from_cfg(cfg)
@@ -569,6 +582,9 @@ def run_pnp_drunet_inpaint(img_path: str, cfg: MethodConfig) -> ImageResult:
     if hp.denoiser.lower() == "drunet":
         denoiser = DRUNetDenoiser(weights_path=str(hp.drunet_weights_path))
         logger.info("Using DRUNet denoiser from %s", hp.drunet_weights_path)
+    elif hp.denoiser.lower() == "diffbir":
+        denoiser = DiffBIRDenoiser(weights_path=str(getattr(hp, "diffbir_weights_path", "")))
+        logger.info("Using DiffBIR Stage-1 SwinIR denoiser (blind)")
     else:
         denoiser = GaussianDenoiser(
             kernel_size=int(hp.gaussian_kernel_size), sigma=float(hp.gaussian_sigma)
@@ -589,11 +605,13 @@ def run_pnp_drunet_inpaint(img_path: str, cfg: MethodConfig) -> ImageResult:
     model_sigma_1 = 49.0
     sigma_schedule = (
         np.logspace(
-            np.log10(model_sigma_1), np.log10(max(model_sigma_2 * 255.0, 0.01)), hp.num_iters
+            np.log10(model_sigma_1),
+            np.log10(max(model_sigma_2 * 255.0, 0.01)),
+            hp.num_iters,
         )
         / 255.0
     )
-    rhos = [(sigma_obs ** 2) / (s ** 2) for s in sigma_schedule]
+    rhos = [(sigma_obs**2) / (s**2) for s in sigma_schedule]
     rhos = torch.tensor(rhos, device=device, dtype=torch.float32)
 
     # Fill unknown pixels with the mean of known pixels so DRUNet gets

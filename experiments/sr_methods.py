@@ -31,6 +31,7 @@ from utils import utils_sisr as sr
 from utils.utils_resizer import Resizer
 
 from .common import ImageResult, MethodConfig
+from .pnp_priors import GaussianDenoiser, DRUNetDenoiser, Denoiser
 
 
 # ===========================================================================
@@ -67,7 +68,7 @@ class DiffPIRSRHyperParams:
     # super-resolution
     sr_mode: str = "blur"  # "blur" or "cubic"
     classical_degradation: bool = False
-    inIter: int = 1    # IBP inner iterations (cubic mode)
+    inIter: int = 1  # IBP inner iterations (cubic mode)
     gamma: float = 0.01  # IBP step size (cubic mode)
 
     # bookkeeping
@@ -79,8 +80,42 @@ class DiffPIRSRHyperParams:
     calc_LPIPS: bool = True
 
 
+@dataclass
+class PnPSRHyperParams:
+    """
+    Hyper-parameters for a PnP super-resolution baseline.
+
+    Uses a denoiser prior (DRUNet or Gaussian) with a DPIR-style HQS iteration.
+    The data step supports both the FFT Wiener-filter (blur mode) and
+    iterative back-projection (cubic mode), matching the DiffPIR SR forward model.
+    """
+
+    # iterations
+    num_iters: int = 50
+
+    # denoiser
+    denoiser: str = "gaussian"  # "gaussian" or "drunet"
+    denoiser_sigma: Optional[float] = None  # terminal sigma; if None -> noise_level_img
+    gaussian_kernel_size: int = 5
+    gaussian_sigma: float = 1.0
+    drunet_weights_path: str = ""
+
+    # SR degradation model (kept consistent with DiffPIR)
+    sr_mode: str = "blur"  # "blur" or "cubic"
+    classical_degradation: bool = False
+    inIter: int = 1  # IBP inner iterations (cubic mode)
+    gamma: float = 0.01  # IBP step size (cubic mode)
+
+    # output / metrics
+    calc_LPIPS: bool = True
+    border: int = 0  # set dynamically to sf
+    save_L: bool = True
+    save_E: bool = True
+    clamp: bool = True
+
+
 # ===========================================================================
-# Hyper-parameter builder
+# Hyper-parameter builders
 # ===========================================================================
 
 
@@ -116,6 +151,31 @@ def _build_hparams_from_cfg(cfg: MethodConfig) -> DiffPIRSRHyperParams:
     return hp
 
 
+def _build_pnp_hparams_from_cfg(cfg: MethodConfig) -> PnPSRHyperParams:
+    """Create PnP SR hyper-parameter object, allowing overrides through `cfg.extra`."""
+    extra: Dict[str, Any] = cfg.extra or {}
+    hp = PnPSRHyperParams()
+    for key in [
+        "num_iters",
+        "denoiser",
+        "denoiser_sigma",
+        "gaussian_kernel_size",
+        "gaussian_sigma",
+        "drunet_weights_path",
+        "sr_mode",
+        "classical_degradation",
+        "inIter",
+        "gamma",
+        "calc_LPIPS",
+        "save_L",
+        "save_E",
+        "clamp",
+    ]:
+        if key in extra:
+            setattr(hp, key, extra[key])
+    return hp
+
+
 # ===========================================================================
 # Private helpers
 # ===========================================================================
@@ -143,7 +203,9 @@ def _load_sr_kernel(sf: int, classical_degradation: bool, cwd: str = "") -> np.n
     is selected. Returns a float64 numpy 2-D kernel.
     """
     if classical_degradation:
-        kernels = hdf5storage.loadmat(os.path.join(cwd, "kernels", "kernels_12.mat"))["kernels"]
+        kernels = hdf5storage.loadmat(os.path.join(cwd, "kernels", "kernels_12.mat"))[
+            "kernels"
+        ]
         k = kernels[0, 0].astype(np.float64)
     else:
         kernels = hdf5storage.loadmat(
@@ -372,6 +434,7 @@ def run_diffpir_sr(img_path: str, cfg: MethodConfig) -> ImageResult:
     loss_fn_vgg = None
     if hp.calc_LPIPS:
         import lpips
+
         loss_fn_vgg = lpips.LPIPS(net="vgg").to(device)
 
     # Load kernel (used for FFT data-consistency in blur mode)
@@ -395,10 +458,9 @@ def run_diffpir_sr(img_path: str, cfg: MethodConfig) -> ImageResult:
 
     # Initialise x at t_start from bicubic-upsampled LR
     x = util.single2tensor4(x_np).to(device)
-    x = (
-        sqrt_alphas_cumprod[t_start] * (2 * x - 1)
-        + sqrt_1m_alphas_cumprod[t_start] * torch.randn_like(x)
-    )
+    x = sqrt_alphas_cumprod[t_start] * (2 * x - 1) + sqrt_1m_alphas_cumprod[
+        t_start
+    ] * torch.randn_like(x)
 
     # FFT pre-computation (blur mode) — done once, not per iteration
     k_tensor = util.single2tensor4(np.expand_dims(k, 2)).to(device)
@@ -410,7 +472,7 @@ def run_diffpir_sr(img_path: str, cfg: MethodConfig) -> ImageResult:
         sigmas.append(reduced_alpha_cumprod[hp.num_train_timesteps - 1 - i])
         sk = sqrt_1m_alphas_cumprod[i] / sqrt_alphas_cumprod[i]
         sigma_ks.append(sk)
-        rhos.append(cfg.lambda_ * (sigma ** 2) / (sk ** 2))
+        rhos.append(cfg.lambda_ * (sigma**2) / (sk**2))
     rhos = torch.tensor(rhos).to(device)
     sigmas = torch.tensor(sigmas).to(device)
 
@@ -421,7 +483,7 @@ def run_diffpir_sr(img_path: str, cfg: MethodConfig) -> ImageResult:
         if skip > 1:
             seq.append(hp.num_train_timesteps - 1)
     elif hp.skip_type == "quad":
-        seq = np.sqrt(np.linspace(0, hp.num_train_timesteps ** 2, hp.iter_num))
+        seq = np.sqrt(np.linspace(0, hp.num_train_timesteps**2, hp.iter_num))
         seq = [int(s) for s in list(seq)]
         seq[-1] = seq[-1] - 1
     else:
@@ -455,18 +517,22 @@ def run_diffpir_sr(img_path: str, cfg: MethodConfig) -> ImageResult:
 
                 if hp.sr_mode == "blur":
                     # Analytic Wiener-filter solution in Fourier domain
-                    x0_p = sr.data_solution(
-                        (x0 / 2 + 0.5).float(), FB, FBC, F2B, FBFy, tau, sf
-                    ) * 2 - 1
+                    x0_p = (
+                        sr.data_solution(
+                            (x0 / 2 + 0.5).float(), FB, FBC, F2B, FBFy, tau, sf
+                        )
+                        * 2
+                        - 1
+                    )
                     x0 = x0 + hp.guidance_scale * (x0_p - x0)
 
                 elif hp.sr_mode == "cubic":
                     # Iterative back-projection (IBP)
                     for _ in range(hp.inIter):
                         x0 = x0 / 2 + 0.5
-                        x0 = x0 + hp.gamma * up_sample(
-                            (y - down_sample(x0))
-                        ) / (1 + rhos[t_i])
+                        x0 = x0 + hp.gamma * up_sample((y - down_sample(x0))) / (
+                            1 + rhos[t_i]
+                        )
                         x0 = x0 * 2 - 1
 
             # Step to next timestep
@@ -485,7 +551,7 @@ def run_diffpir_sr(img_path: str, cfg: MethodConfig) -> ImageResult:
                     sqrt_alphas_cumprod[t_im1] * x0
                     + np.sqrt(1 - cfg.zeta)
                     * (
-                        torch.sqrt(sqrt_1m_alphas_cumprod[t_im1] ** 2 - eta_sigma ** 2)
+                        torch.sqrt(sqrt_1m_alphas_cumprod[t_im1] ** 2 - eta_sigma**2)
                         * eps
                         + eta_sigma * torch.randn_like(x)
                     )
@@ -501,7 +567,7 @@ def run_diffpir_sr(img_path: str, cfg: MethodConfig) -> ImageResult:
                 sqrt_ae = sqrt_alphas_cumprod[t_i] / sqrt_alphas_cumprod[t_im1]
                 x = sqrt_ae * x + torch.sqrt(
                     sqrt_1m_alphas_cumprod[t_i] ** 2
-                    - sqrt_ae ** 2 * sqrt_1m_alphas_cumprod[t_im1] ** 2
+                    - sqrt_ae**2 * sqrt_1m_alphas_cumprod[t_im1] ** 2
                 ) * torch.randn_like(x)
 
         x_0 = x / 2 + 0.5
@@ -530,7 +596,16 @@ def run_diffpir_sr(img_path: str, cfg: MethodConfig) -> ImageResult:
     extra = cfg.extra or {}
     method_out = os.path.join(extra.get("output_root", "outputs"), "diffpir_sr")
     _save_outputs(
-        img_E, img_L, method_out, img_name, ext, sf, "diffpir", hp.save_E, hp.save_L, logger
+        img_E,
+        img_L,
+        method_out,
+        img_name,
+        ext,
+        sf,
+        "diffpir",
+        hp.save_E,
+        hp.save_L,
+        logger,
     )
     out_est = os.path.join(method_out, f"{img_name}_x{sf}_diffpir{ext}")
 
@@ -553,15 +628,165 @@ def run_dps_sr(img_path: str, cfg: MethodConfig, mode: str = "DPS_y0") -> ImageR
     raise NotImplementedError("run_dps_sr is not implemented yet.")
 
 
-def run_pnp_drunet_sr(img_path: str, cfg: MethodConfig) -> ImageResult:
+def run_pnp_sr(img_path: str, cfg: MethodConfig) -> ImageResult:
     """
-    Plug-and-play SR runner using DRUNet or another `Denoiser` prior.
+    Plug-and-play super-resolution runner using DRUNet or another `Denoiser` prior.
 
-    Recommended design:
-    - Construct a DRUNetDenoiser (or other denoiser) instance.
-    - Implement an iterative PnP scheme:
-      * data step using the SR forward model
-      * prior step using the denoiser
-    - Return an `ImageResult` with metrics.
+    Uses a DPIR-style HQS iteration with:
+      - Prior step: DRUNet (or Gaussian) denoiser on the HR estimate
+      - Data step (blur mode): analytic FFT Wiener-filter solution via
+        `sr.pre_calculate` / `sr.data_solution` — identical to DiffPIR SR
+      - Data step (cubic mode): iterative back-projection (IBP)
     """
-    raise NotImplementedError("run_pnp_drunet_sr is not implemented yet.")
+    assert cfg.task == "sr", f"PnP SR expects task='sr', got {cfg.task!r}"
+
+    sf = cfg.sf
+    deg = _build_hparams_from_cfg(cfg)
+    hp = _build_pnp_hparams_from_cfg(cfg)
+    hp.border = sf
+
+    img_name, ext = os.path.splitext(os.path.basename(img_path))
+    logger = _make_logger(f"pnp_sr.{img_name}")
+
+    logger.info(
+        "Starting PnP SR | img=%s | sf=%d | denoiser=%s | iters=%d | mode=%s | noise=%.4f",
+        img_name,
+        sf,
+        hp.denoiser,
+        hp.num_iters,
+        hp.sr_mode,
+        deg.noise_level_img,
+    )
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Image and degraded observation (same pipeline as DiffPIR for fair comparison)
+    n_channels = 3
+    logger.info("Loading ground-truth image from %s", img_path)
+    img_H = util.imread_uint(img_path, n_channels=n_channels)
+    img_H = util.modcrop(img_H, sf)
+
+    k = _load_sr_kernel(sf, hp.classical_degradation)
+    logger.info(
+        "Loaded SR kernel | classical=%s | sf=%d | shape=%s",
+        hp.classical_degradation,
+        sf,
+        k.shape,
+    )
+
+    img_L, y, x_np, down_sample, up_sample = _make_sr_observation(
+        img_H, k, sf, deg, device, logger
+    )
+
+    # Denoiser selection
+    denoiser: Denoiser
+    if hp.denoiser.lower() == "drunet":
+        denoiser = DRUNetDenoiser(weights_path=str(hp.drunet_weights_path))
+        logger.info("Using DRUNet denoiser from %s", hp.drunet_weights_path)
+    else:
+        denoiser = GaussianDenoiser(
+            kernel_size=int(hp.gaussian_kernel_size), sigma=float(hp.gaussian_sigma)
+        )
+        logger.info(
+            "Using Gaussian denoiser (kernel=%d, sigma=%.2f)",
+            hp.gaussian_kernel_size,
+            hp.gaussian_sigma,
+        )
+
+    # DPIR-style rho/sigma schedule (logspace from modelSigma1 to modelSigma2)
+    sigma_obs = max(0.255 / 255.0, float(deg.noise_level_img))
+    model_sigma_2 = (
+        float(hp.denoiser_sigma)
+        if hp.denoiser_sigma is not None
+        else float(deg.noise_level_img)
+    )
+    model_sigma_1 = 49.0
+    sigma_schedule = (
+        np.logspace(
+            np.log10(model_sigma_1),
+            np.log10(max(model_sigma_2 * 255.0, 0.255)),
+            hp.num_iters,
+        )
+        / 255.0
+    )
+    rhos = [(sigma_obs**2) / (s**2) for s in sigma_schedule]
+    rhos = torch.tensor(rhos, device=device, dtype=torch.float32)
+
+    # Initialize x at HR size from bicubic-upsampled LR
+    x = util.single2tensor4(x_np).to(device)
+
+    # FFT pre-computation for blur-mode data step (done once outside the loop)
+    FB, FBC, F2B, FBFy = None, None, None, None
+    if hp.sr_mode == "blur":
+        k_tensor = util.single2tensor4(np.expand_dims(k, 2)).to(device)
+        FB, FBC, F2B, FBFy = sr.pre_calculate(y, k_tensor, sf)
+
+    for it in tqdm(range(hp.num_iters), desc=f"PnP SR x{sf}"):
+        # Step 1: Prior (denoiser) step
+        sigma_it = float(sigma_schedule[it])
+        x = denoiser(x, sigma=sigma_it)
+
+        # Step 2: Data step
+        rho = rhos[it].float()
+
+        if hp.sr_mode == "blur":
+            tau = rho.repeat(1, 1, 1, 1)
+            x = sr.data_solution(x.float(), FB, FBC, F2B, FBFy, tau, sf)
+        elif hp.sr_mode == "cubic":
+            for _ in range(hp.inIter):
+                x = x + hp.gamma * up_sample(y - down_sample(x)) / (1.0 + rho)
+        else:
+            raise ValueError(f"Unknown sr_mode {hp.sr_mode!r}")
+
+        if hp.clamp:
+            x = x.clamp(0.0, 1.0)
+
+    # Metrics
+    loss_fn_vgg = None
+    if hp.calc_LPIPS:
+        import lpips
+
+        loss_fn_vgg = lpips.LPIPS(net="vgg").to(device)
+
+    img_E = util.tensor2uint(x)
+    psnr = util.calculate_psnr(img_E, img_H, border=int(hp.border))
+
+    img_E_y = util.rgb2ycbcr(img_E, only_y=True)
+    img_H_y = util.rgb2ycbcr(img_H, only_y=True)
+    psnr_y = util.calculate_psnr(img_E_y, img_H_y, border=int(hp.border))
+
+    lpips_score = _compute_lpips(loss_fn_vgg, x, img_H, device)
+
+    logger.info(
+        "Results | img=%s | PSNR=%.3f dB | PSNR-Y=%.3f dB | LPIPS=%s",
+        img_name,
+        psnr,
+        psnr_y,
+        f"{lpips_score:.4f}" if lpips_score is not None else "N/A",
+    )
+
+    # Save outputs
+    extra = cfg.extra or {}
+    method_out = os.path.join(extra.get("output_root", "outputs"), "pnp_sr")
+    suffix = f"pnp_{hp.denoiser}"
+    _save_outputs(
+        img_E,
+        img_L,
+        method_out,
+        img_name,
+        ext,
+        sf,
+        suffix,
+        hp.save_E,
+        hp.save_L,
+        logger,
+    )
+    out_est = os.path.join(method_out, f"{img_name}_x{sf}_{suffix}{ext}")
+
+    return ImageResult(
+        psnr=float(psnr),
+        psnr_y=float(psnr_y),
+        image_path=img_path,
+        lpips=lpips_score,
+        output_path=out_est,
+    )

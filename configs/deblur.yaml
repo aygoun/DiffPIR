@@ -40,7 +40,6 @@ diffpir:
   blur_mode: "Gaussian" # Gaussian; motion
   kernel_size: 61
 
-
 dps_y0:
   task: deblur
   name: dps_y0
@@ -59,8 +58,8 @@ dps_y0:
 
   # Core Method Configs
   generate_mode: DPS_y0
-  lambda_: 0.1  # Controls the gradient step size for DPS
-  zeta: 0.0     # Required by MethodConfig (unused in standard DPS)
+  lambda_: 0.1 # Controls the gradient step size for DPS
+  zeta: 0.0 # Required by MethodConfig (unused in standard DPS)
   n_channels: 3
   cwd: ""
 
@@ -70,7 +69,6 @@ dps_y0:
   blur_mode: "Gaussian"
   kernel_size: 61
   kernel_std: 3.0
-
 
 dps_yt:
   task: deblur
@@ -90,8 +88,8 @@ dps_yt:
 
   # Core Method Configs
   generate_mode: DPS_yt
-  lambda_: 0.1  # Controls the gradient step size for DPS
-  zeta: 0.0     # Required by MethodConfig (unused in standard DPS)
+  lambda_: 0.1 # Controls the gradient step size for DPS
+  zeta: 0.0 # Required by MethodConfig (unused in standard DPS)
   n_channels: 3
   cwd: ""
 
@@ -101,7 +99,6 @@ dps_yt:
   blur_mode: "Gaussian"
   kernel_size: 61
   kernel_std: 3.0
-
 
 pnp_drunet:
   # Base configuration for PnP+DRUNet experiments.
@@ -148,16 +145,16 @@ pnp_drunet:
   # GaussianDenoiser baseline, or "drunet" to use the DRUNet prior below.
   denoiser: drunet
 
-  # Iterative scheme parameters
-  num_iters: 50 # number of PnP iterations (DPIR quality: 200, fast: 8)
-  step_size: 1.0 # gradient descent step size for data term
-  data_weight: 1.0 # relative weight of data fidelity
+  # DPIR paper uses 200 iterations for quality restoration; 50 is too few for
+  # the logspace annealing (rho 0.07 → 39) to complete and deliver a sharp result.
+  num_iters: 200
+  step_size: 1.0
+  data_weight: 1.0
 
-  # Denoiser noise level schedule
-  # Terminal sigma for the logspace schedule (model_sigma_1=49/255 → denoiser_sigma).
-  # DPIR uses ~2/255≈0.008; 0.05 is too high and causes heavy smoothing.
-  denoiser_sigma: 0.008 # nominal noise level fed to the denoiser at the last iteration
-  sigma_schedule: constant # "constant" or "linear" (anneal sigma to 0)
+  # Terminal sigma for the logspace schedule: logspace(49/255, denoiser_sigma, num_iters).
+  # 2/255 ≈ 0.008 is the DPIR default: final rho ≈ (0.05/0.008)² ≈ 39 so the
+  # data step (Wiener deconvolution) dominates and the output is sharp.
+  denoiser_sigma: 0.008
 
   # Fallback Gaussian denoiser parameters (used if denoiser: gaussian)
   gaussian_kernel_size: 5
@@ -175,6 +172,76 @@ pnp_drunet:
   # Leave empty to load from Hugging Face (perckle/DPIR) by default.
   # Set to a local path (e.g. model_zoo/drunet_color.safetensors) to override.
   drunet_weights_path: ""
+
+  # ---------------------------------------------------------------------------
+  # Output and metrics
+  # ---------------------------------------------------------------------------
+  calc_LPIPS: true
+  save_L: true
+  save_E: true
+  clamp: true
+  output_root: "outputs"
+
+pnp_gaussian:
+  # Base configuration for PnP+DRUNet experiments.
+  # This file mirrors the structure of the other task configs (deblur/sisr)
+  # but adds a section for PnP-specific hyper‑parameters and DRUNet weights.
+
+  # -----------------------------------------------------------------------------
+  # Core experiment settings (used to build MethodConfig)
+  # -----------------------------------------------------------------------------
+
+  # Task can be "sr", "deblur", or "inpaint". For the current project we
+  # primarily use this as a deblurring baseline; adjust as needed.
+  task: deblur
+
+  # Name of the method in plots / registries
+  name: pnp_gaussian
+
+  # For PnP we do not use the diffusion model; this field is still required by
+  # MethodConfig and is used only as a label.
+  generate_mode: pnp_gaussian
+
+  # Global scalar hyper‑parameters forwarded to MethodConfig
+  lambda_: 1.0
+  zeta: 0.0
+
+  # Scale factor (sf=1 for deblurring, sf=4 for SR, etc.)
+  sf: 1
+
+  # -----------------------------------------------------------------------------
+  # Degradation model (kept consistent with DiffPIR deblur config)
+  # -----------------------------------------------------------------------------
+
+  noise_level_img: 0.05 # AWGN standard deviation on the observation (≈12.75/255)
+  noise_level_model: noise_level_img
+  blur_mode: "Gaussian" # "Gaussian" or "motion"
+  kernel_size: 61
+  kernel_std: 3.0
+
+  # -----------------------------------------------------------------------------
+  # PnP+DRUNet hyper‑parameters (map directly to cfg.extra in MethodConfig)
+  # -----------------------------------------------------------------------------
+
+  # Choose which prior to use in PnP. Set to "gaussian" to use the
+  # GaussianDenoiser baseline, or "drunet" to use the DRUNet prior below.
+  denoiser: gaussian
+
+  # Gaussian is a weak baseline; more iterations help the data step accumulate
+  # corrections, but it will remain softer than DRUNet.
+  num_iters: 100
+  step_size: 1.0
+  data_weight: 1.0
+
+  # rho schedule: logspace(49/255, denoiser_sigma, num_iters).
+  # Use noise_level_img as terminal sigma so rho_final = 1 (balanced).
+  # Gaussian can't recover HF anyway; too large rho just creates ringing.
+  denoiser_sigma: 0.05
+
+  # Gaussian kernel: reduce sigma from 1.0 → 0.5 so each prior step blurs less,
+  # leaving more room for the data step to reconstruct sharp edges.
+  gaussian_kernel_size: 5
+  gaussian_sigma: 0.5
 
   # ---------------------------------------------------------------------------
   # Output and metrics

@@ -108,14 +108,15 @@ class PnPDeblurHyperParams:
 
     # denoiser
     denoiser: str = "gaussian"  # "gaussian" or "drunet"
-    denoiser_sigma: Optional[float] = 0.008  # terminal sigma for logspace schedule (~2/255)
-    sigma_schedule: str = "constant"  # "constant" or "linear"
+    denoiser_sigma: Optional[float] = (
+        0.008  # terminal sigma for logspace schedule (~2/255, DPIR default)
+    )
 
     # gaussian denoiser params (fallback)
     gaussian_kernel_size: int = 5
     gaussian_sigma: float = 1.0
 
-    # drunet params (only used if implemented in this repo)
+    # drunet params (only used when denoiser="drunet")
     drunet_weights_path: str = ""
 
     # output / metrics
@@ -171,7 +172,6 @@ def _build_pnp_hparams_from_cfg(cfg: MethodConfig) -> PnPDeblurHyperParams:
         "data_weight",
         "denoiser",
         "denoiser_sigma",
-        "sigma_schedule",
         "gaussian_kernel_size",
         "gaussian_sigma",
         "drunet_weights_path",
@@ -749,7 +749,7 @@ def run_dps_deblur(
     )
 
 
-def run_pnp_drunet_deblur(img_path: str, cfg: MethodConfig) -> ImageResult:
+def run_pnp_deblur(img_path: str, cfg: MethodConfig) -> ImageResult:
     """
     Plug-and-play deblurring runner using DRUNet or another `Denoiser` prior.
 

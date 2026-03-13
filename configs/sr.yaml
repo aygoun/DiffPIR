@@ -2,7 +2,7 @@ diffpir:
   task: sr
   seed: 42
 
-  noise_level_img: 0.05       # 12.75 / 255
+  noise_level_img: 0.05 # 12.75 / 255
   noise_level_model: 0.05
   model_name: diffusion_ffhq_10m
   testset_name: demo_test
@@ -25,7 +25,7 @@ diffpir:
   eta: 0.0
   guidance_scale: 1.0
   n_channels: 3
-  cwd: ''
+  cwd: ""
 
   calc_LPIPS: true
   beta_start: 0.0001
@@ -33,7 +33,77 @@ diffpir:
 
   # sr
   sf: 4
-  sr_mode: blur             # blur | cubic
+  sr_mode: blur # blur | cubic
   classical_degradation: false
-  inIter: 1                 # IBP inner iterations (cubic mode only)
-  gamma: 0.01               # IBP step size (cubic mode only)
+  inIter: 1 # IBP inner iterations (cubic mode only)
+  gamma: 0.01 # IBP step size (cubic mode only)
+
+pnp_drunet:
+  task: sr
+  name: pnp_drunet
+  generate_mode: pnp_drunet
+
+  lambda_: 1.0
+  zeta: 0.0
+  sf: 4
+
+  # Degradation (kept consistent with DiffPIR SR config)
+  noise_level_img: 0.05
+  sr_mode: blur
+  classical_degradation: false
+  inIter: 1
+  gamma: 0.01
+
+  # PnP hyper-parameters
+  denoiser: drunet
+  # More iterations let the logspace annealing (49/255 → denoiser_sigma) complete.
+  num_iters: 100
+  # Lower terminal sigma → DRUNet barely denoises at the end → rho_final ≈ 25
+  # → data step dominates at high freq → sharper SR reconstruction.
+  # (DPIR default denoiser_sigma = noise_level_img = 0.05 gives rho_final = 1,
+  # which is too weak to sharpen a 4× upsampled image.)
+  denoiser_sigma: 0.01
+  gaussian_kernel_size: 5
+  gaussian_sigma: 1.0
+  drunet_weights_path: ""
+
+  # Output and metrics
+  calc_LPIPS: true
+  save_L: true
+  save_E: true
+  clamp: true
+  output_root: "outputs"
+
+pnp_gaussian:
+  task: sr
+  name: pnp_gaussian
+  generate_mode: pnp_gaussian
+
+  lambda_: 1.0
+  zeta: 0.0
+  sf: 4
+
+  # Degradation (kept consistent with DiffPIR SR config)
+  noise_level_img: 0.05
+  sr_mode: blur
+  classical_degradation: false
+  inIter: 1
+  gamma: 0.01
+
+  # PnP hyper-parameters
+  denoiser: gaussian
+  num_iters: 100
+  # Keep denoiser_sigma at noise_level_img; Gaussian can't recover HF so large
+  # rho_final would only add Wiener ringing without improving sharpness.
+  denoiser_sigma: 0.05
+  gaussian_kernel_size: 5
+  # Lighter Gaussian kernel per step (0.5 vs 1.0) so the data step has more
+  # room to push energy back into high frequencies each iteration.
+  gaussian_sigma: 0.5
+
+  # Output and metrics
+  calc_LPIPS: true
+  save_L: true
+  save_E: true
+  clamp: true
+  output_root: "outputs"
