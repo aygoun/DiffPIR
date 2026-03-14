@@ -39,6 +39,71 @@ diffpir:
   mask_len_range: [128, 129]
   mask_prob_range: [0.5, 0.5]
 
+
+dps_y0:
+  task: inpaint
+  name: dps_y0
+  seed: 42
+
+  noise_level_img: 0.0
+  noise_level_model: 0.0
+  model_name: diffusion_ffhq_10m
+  testset_name: demo_test
+  num_train_timesteps: 1000
+  batch_size: 16
+
+  save_L: true
+  save_E: true
+  output_root: "outputs"
+
+  # Core Method Configs
+  generate_mode: DPS_y0
+  lambda_: 0.1 # Controls the gradient step size (zeta_t) for DPS
+  zeta: 0.0 
+  n_channels: 3
+  cwd: ""
+
+  calc_LPIPS: true
+  sf: 1
+  load_mask: false
+  mask_name: "gt_keep_masks/face/000000.png"
+  mask_type: "random" 
+  mask_len_range: [128, 129]
+  mask_prob_range: [0.5, 0.5]
+
+
+dps_yt:
+  task: inpaint
+  name: dps_yt
+  seed: 42
+
+  noise_level_img: 0.0
+  noise_level_model: 0.0
+  model_name: diffusion_ffhq_10m
+  testset_name: demo_test
+  num_train_timesteps: 1000
+  batch_size: 16
+
+  save_L: true
+  save_E: true
+  output_root: "outputs"
+
+  # Core Method Configs
+  generate_mode: DPS_yt
+  lambda_: 0.1 # Controls the gradient step size (zeta_t) for DPS
+  zeta: 0.0 
+  n_channels: 3
+  cwd: ""
+
+  calc_LPIPS: true
+  sf: 1
+  load_mask: false
+  mask_name: "gt_keep_masks/face/000000.png"
+  mask_type: "random" 
+  mask_len_range: [128, 129]
+  mask_prob_range: [0.5, 0.5]
+
+
 pnp_drunet:
   task: inpaint
   name: pnp_drunet

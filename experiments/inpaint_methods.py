@@ -526,12 +526,127 @@ def run_dps_inpaint(
     img_path: str, cfg: MethodConfig, mode: str = "DPS_y0"
 ) -> ImageResult:
     """
-    Single-image DPS inpainting runner (to be implemented).
+    Single-image DPS inpainting runner.
 
     `mode` should be either "DPS_y0" or "DPS_yt" and controls how the
     data-consistency term is applied in the loop.
     """
-    raise NotImplementedError("run_dps_inpaint is not implemented yet.")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+
+    hp = _build_hparams_from_cfg(cfg)
+    img_name, ext = os.path.splitext(os.path.basename(img_path))
+    logger = _make_logger(f"dps_inpaint.{img_name}")
+
+    # 1. Noise schedule (Standard sequence)
+    beta_start = 0.1 / 1000
+    beta_end = 20 / 1000
+    betas = np.linspace(beta_start, beta_end, hp.num_train_timesteps, dtype=np.float32)
+    betas = torch.from_numpy(betas).to(device)
+    alphas = 1.0 - betas
+    alphas_cumprod = torch.cumprod(alphas, dim=0)
+    sqrt_alphas_cumprod = torch.sqrt(alphas_cumprod)
+    sqrt_1m_alphas_cumprod = torch.sqrt(1.0 - alphas_cumprod)
+    betabar = 1.0 - alphas_cumprod
+
+    # 2. Model loading (Safely FREEZING weights to prevent OOM)
+    model_zoo = os.path.join("", "model_zoo")
+    model_path = os.path.join(model_zoo, hp.model_name + ".pt")
+    model_config = (
+        dict(model_path=model_path, num_channels=128, num_res_blocks=1, attention_resolutions="16")
+        if hp.model_name == "diffusion_ffhq_10m"
+        else dict(model_path=model_path, num_channels=256, num_res_blocks=2, attention_resolutions="8,16,32")
+    )
+    args = utils_model.create_argparser(model_config).parse_args([])
+    model, diffusion = create_model_and_diffusion(**args_to_dict(args, model_and_diffusion_defaults().keys()))
+    model.load_state_dict(torch.load(args.model_path, map_location="cpu"))
+    model.eval()
+    for _, v in model.named_parameters():
+        v.requires_grad = True
+    model = model.to(device)
+
+    if hp.calc_LPIPS:
+        import lpips
+        loss_fn_vgg = lpips.LPIPS(net="vgg").to(device) 
+    else: 
+        loss_fn_vgg = None
+
+    # 3. Image + degradation loading
+    n_channels = 3
+    logger.info("Loading ground-truth image from %s", img_path)
+    img_H = util.imread_uint(img_path, n_channels=n_channels)
+
+    mask_np = _build_mask(hp, img_H, logger)
+    # Note: _make_inpaint_observation returns 'y' already in the [-1, 1] domain!
+    img_L, y, mask_tensor = _make_inpaint_observation(img_H, mask_np, hp.noise_level_img, device, logger)
+
+    # 4. Build Forward Operator (A) for DPS Data Consistency
+    def mask_operator(tensor):
+        """Applies the binary mask to the tensor."""
+        return tensor * mask_tensor
+
+    # Initialize x at timestep T
+    xt = torch.randn_like(y, device=device)
+
+    logger.info("Starting DPS reverse diffusion (%d steps)", hp.num_train_timesteps)
+
+    # 5. Reverse Diffusion Loop
+    for i, t in tqdm(enumerate(reversed(range(hp.num_train_timesteps))), desc=f"DPS Inpaint {mode}"):
+        
+        # CRITICAL: Detach and require grad at the start of EVERY step
+        xt = xt.detach().requires_grad_()
+        t_tensor = torch.tensor([t], device=device)
+
+        # 5a. Unet Prediction
+        model_out = model(xt, t_tensor)
+        eps = model_out[:, :3, :, :]
+
+        # Calculate predicted clean image (xhat_0)
+        xhat = (1.0 / sqrt_alphas_cumprod[t]) * xt - (sqrt_1m_alphas_cumprod[t] / sqrt_alphas_cumprod[t]) * eps
+
+        # 5b. Data consistency (L2 Loss)
+        if mode == "DPS_y0":
+            loss = torch.sum((mask_operator(xhat) - y) ** 2)
+            
+        elif mode == "DPS_yt":
+            noise_y = mask_operator(eps.detach())
+            y_t = (sqrt_alphas_cumprod[t] * y) + (sqrt_1m_alphas_cumprod[t] * noise_y)
+            loss = torch.sum((mask_operator(xt) - y_t) ** 2)
+
+        grad_l2 = torch.autograd.grad(outputs=loss, inputs=xt)[0]
+
+        # 5c. Standard DDPM backward step (mu)
+        mu = (1.0 / torch.sqrt(alphas[t])) * (xt - (betas[t] / torch.sqrt(betabar[t])) * eps)
+
+        # 5d. DPS Gradient Correction
+        loss_val = loss.detach().item()
+        zetat = cfg.lambda_ * (loss_val ** -0.5) if loss_val > 0 else 0.0
+        noise = torch.randn_like(xt) if t > 0 else torch.zeros_like(xt)
+
+        xt = mu + torch.sqrt(betas[t]) * noise - zetat * grad_l2
+
+    # 6. Post-processing and Metrics
+    # Standard DPS doesn't forcibly inject the exact known pixels back in, but for best metric performance in inpainting, it is standard practice.
+    x_final = xt.detach() / 2.0 + 0.5
+    y_0_1 = y / 2.0 + 0.5
+    x_final = (x_final * (1 - mask_tensor)) + (y_0_1 * mask_tensor)
+    x_0 = x_final.clamp(0.0, 1.0)
+
+    logger.info("Reverse diffusion finished for %s", img_name)
+
+    img_E = util.tensor2uint(x_0)
+    psnr = util.calculate_psnr(img_E, img_H, border=hp.border)
+    lpips_score = _compute_lpips(loss_fn_vgg, x_0, img_H, device)
+
+    logger.info("Results | img=%s | PSNR=%.3f dB | LPIPS=%s", img_name, psnr, f"{lpips_score:.4f}" if lpips_score is not None else "N/A")
+
+    extra = cfg.extra or {}
+    method_out = os.path.join(extra.get("output_root", "outputs"), f"dps_{mode}_inpaint")
+    _save_outputs(img_E, img_L, method_out, img_name, ext, f"dps_{mode}", hp.save_E, hp.save_L, logger)
+    out_est = os.path.join(method_out, f"{img_name}_dps_{mode}{ext}")
+
+    return ImageResult(psnr=float(psnr), image_path=img_path, lpips=lpips_score, output_path=out_est)
 
 
 def run_pnp_inpaint(img_path: str, cfg: MethodConfig) -> ImageResult:

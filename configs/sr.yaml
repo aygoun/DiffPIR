@@ -38,6 +38,69 @@ diffpir:
   inIter: 1 # IBP inner iterations (cubic mode only)
   gamma: 0.01 # IBP step size (cubic mode only)
 
+
+dps_y0:
+  task: sr
+  name: dps_y0
+  seed: 42
+
+  noise_level_img: 0.05
+  noise_level_model: 0.05
+  model_name: diffusion_ffhq_10m
+  testset_name: demo_test
+  num_train_timesteps: 1000
+  batch_size: 16
+
+  save_L: true
+  save_E: true
+  output_root: "outputs"
+
+  # Core Method Configs
+  generate_mode: DPS_y0
+  lambda_: 0.1 # Controls the gradient step size (zeta_t) for DPS
+  zeta: 0.0
+  n_channels: 3
+  cwd: ""
+
+  calc_LPIPS: true
+  sf: 4
+  sr_mode: blur # blur | cubic
+  classical_degradation: false
+  inIter: 1 
+  gamma: 0.01 
+
+
+dps_yt:
+  task: sr
+  name: dps_yt
+  seed: 42
+
+  noise_level_img: 0.05
+  noise_level_model: 0.05
+  model_name: diffusion_ffhq_10m
+  testset_name: demo_test
+  num_train_timesteps: 1000
+  batch_size: 16
+
+  save_L: true
+  save_E: true
+  output_root: "outputs"
+
+  # Core Method Configs
+  generate_mode: DPS_yt
+  lambda_: 0.1 # Controls the gradient step size (zeta_t) for DPS
+  zeta: 0.0
+  n_channels: 3
+  cwd: ""
+
+  calc_LPIPS: true
+  sf: 4
+  sr_mode: blur # blur | cubic
+  classical_degradation: false
+  inIter: 1 
+  gamma: 0.01
+
+
 pnp_drunet:
   task: sr
   name: pnp_drunet

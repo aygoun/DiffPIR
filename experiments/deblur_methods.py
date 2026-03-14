@@ -619,21 +619,16 @@ def run_dps_deblur(
     k = _build_blur_kernel(hp, device, logger)
     img_L, y = _make_noisy_observation(img_H, k, hp.noise_level_img, device, logger)
 
-    # 4. Build Forward Operator (A) for DPS Data Consistency
-    # Adjust kernel shape for depthwise 2D convolution over 3 channels
-    k_tensor = (
-        torch.tensor(k, device=device, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
-    )
+    y_scaled = y * 2.0 - 1.0  # Scale to [-1, 1] for consistency with model input range
+
+    k_tensor = (torch.tensor(k, device=device, dtype=torch.float32).unsqueeze(0).unsqueeze(0))
     k_tensor = k_tensor.repeat(3, 1, 1, 1)
 
-    def linear_operator(x_hat):
+    def blur_operator(tensor):
         """Applies circular blur matching the degradation process."""
-        # Map x_hat from [-1, 1] to [0, 1] to match the y tensor's domain
-        x_0_1 = x_hat / 2.0 + 0.5
         pad_sz = k.shape[0] // 2
-        # Use circular padding to mimic scipy's mode="wrap"
         x_pad = torch.nn.functional.pad(
-            x_0_1, (pad_sz, pad_sz, pad_sz, pad_sz), mode="circular"
+            tensor, (pad_sz, pad_sz, pad_sz, pad_sz), mode="circular"
         )
         return torch.nn.functional.conv2d(x_pad, k_tensor, groups=3)
 
@@ -642,77 +637,44 @@ def run_dps_deblur(
 
     logger.info("Starting DPS reverse diffusion (%d steps)", hp.num_train_timesteps)
 
-    # 5. Reverse Diffusion Loop (Inspired by tp9 notebook)
-    for i, t_val in tqdm(
-        enumerate(reversed(range(hp.num_train_timesteps))), desc="DPS Deblurring"
-    ):
+    # Reverse Diffusion Loop
+    for i, t in tqdm(enumerate(reversed(range(hp.num_train_timesteps))), desc="DPS Deblurring"):
 
-        # We need gradients flowing back to xt to compute the data consistency step
-        xt = xt.requires_grad_()
-        t_tensor = torch.tensor([t_val], device=device)
+        xt = xt.detach().requires_grad_()
+        t_tensor = torch.tensor([t], device=device)
 
-        # 5a. Unet Prediction
+        # Noise prediction
         model_out = model(xt, t_tensor)
         eps = model_out[:, :3, :, :]
 
-        # Calculate predicted clean image (xhat_0)
-        xhat = (1.0 / sqrt_alphas_cumprod[t_val]) * xt - (
-            sqrt_1m_alphas_cumprod[t_val] / sqrt_alphas_cumprod[t_val]
-        ) * eps
+        # clean image estimation 
+        xhat = (1.0 / sqrt_alphas_cumprod[t]) * xt - (sqrt_1m_alphas_cumprod[t] / sqrt_alphas_cumprod[t]) * eps
 
-        # 5b. Data consistency (L2 Loss & Gradient)
+        # l2 loss depending on mdoe
         if mode == "DPS_y0":
             # Standard DPS: Compare predicted clean image (mapped to [0,1]) to clean measurement
-            target_x = xhat
-            loss = torch.sum((linear_operator(target_x) - y) ** 2)
+            l2 = torch.sum((blur_operator(xhat) - y_scaled) ** 2)
 
         elif mode == "DPS_yt":
-            # 1. Create a pure convolution operator (without the [-1,1] to [0,1] shift)
-            # This allows us to accurately scale the noise in the raw diffusion space
-            pad_sz = k.shape[0] // 2
+            # Construct the consistent noisy measurement y_t
+            noise_y = blur_operator(eps.detach())
+            y_t = (sqrt_alphas_cumprod[t] * y_scaled) + (sqrt_1m_alphas_cumprod[t] * noise_y)
+            
+            # Compare the blurred noisy image to the aligned noisy measurement
+            l2 = torch.sum((blur_operator(xt) - y_t) ** 2)
 
-            def pure_conv(tensor):
-                x_pad = torch.nn.functional.pad(
-                    tensor, (pad_sz, pad_sz, pad_sz, pad_sz), mode="circular"
-                )
-                return torch.nn.functional.conv2d(x_pad, k_tensor, groups=3)
+        grad_l2 = torch.autograd.grad(outputs=l2, inputs=xt)[0]
 
-            # 2. Scale the clean measurement 'y' to the [-1, 1] diffusion space
-            y_scaled = y * 2.0 - 1.0
+        # 5cStandard DDPM backward step (mu)
+        mu = (1.0 / torch.sqrt(alphas[t])) * (xt - (betas[t] / torch.sqrt(betabar[t])) * eps)
 
-            # 3. Construct the consistent noisy measurement y_t
-            # THE FIX: Use the model's own predicted noise (eps) instead of random noise.
-            # We detach it because y_t is our fixed target for this step.
-            noise_y = pure_conv(eps.detach())
-            y_t = (sqrt_alphas_cumprod[t_val] * y_scaled) + (
-                sqrt_1m_alphas_cumprod[t_val] * noise_y
-            )
-
-            # 4. Compare the purely blurred noisy image to the aligned noisy measurement
-            pred_yt = pure_conv(xt)
-            loss = torch.sum((pred_yt - y_t) ** 2)
-
-        grad_l2 = torch.autograd.grad(outputs=loss, inputs=xt)[0]
-
-        # 5c. Standard DDPM backward step (mu)
-        mu = (1.0 / torch.sqrt(alphas[t_val])) * (
-            xt - (betas[t_val] / torch.sqrt(betabar[t_val])) * eps
-        )
-
-        # 5d. DPS Gradient Correction
-        # The scaling factor zeta_t is adapted directly from the notebook
-        zetat = 0.1 * torch.pow(loss.detach(), -0.5) if loss.item() > 0 else 0.0
-
-        if t_val > 0:
-            noise = torch.randn_like(xt) * torch.sqrt(betas[t_val])
-        else:
-            noise = 0.0
+        # DPS Gradient Correction
+        zetat = 0.1 * torch.pow(l2, -0.5)
 
         # Final backward update combining DDPM, additive noise, and DPS guidance
-        xt = (mu + noise - zetat * grad_l2).detach()
+        xt = (mu + torch.sqrt(betas[t]) * torch.randn_like(xt) - zetat * grad_l2).detach()
 
-    # 6. Post-processing and Metrics
-    x_0 = xt / 2.0 + 0.5
+    x_0 = xt.detach() / 2.0 + 0.5
     x_0 = x_0.clamp(0.0, 1.0)
 
     logger.info("Reverse diffusion finished for %s", img_name)
