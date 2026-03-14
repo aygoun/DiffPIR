@@ -663,11 +663,10 @@ def run_dps_sr(img_path: str, cfg: MethodConfig, mode: str = "DPS_y0") -> ImageR
         v.requires_grad = True 
     model = model.to(device)
 
+    loss_fn_vgg = None
     if hp.calc_LPIPS:
         import lpips
         loss_fn_vgg = lpips.LPIPS(net="vgg").to(device)
-    else:
-        loss_fn_vgg = None
 
     # 3. Image + degradation loading
     n_channels = 3
@@ -711,29 +710,27 @@ def run_dps_sr(img_path: str, cfg: MethodConfig, mode: str = "DPS_y0") -> ImageR
         model_out = model(xt, t_tensor)
         eps = model_out[:, :3, :, :]
 
-        # Calculate predicted clean image (xhat_0)
-        xhat = (1.0 / sqrt_alphas_cumprod[t]) * xt - (sqrt_1m_alphas_cumprod[t] / sqrt_alphas_cumprod[t]) * eps
-
         # 5b. Data consistency (L2 Loss)
         if mode == "DPS_y0":
-            loss = torch.sum((forward_operator(xhat) - y_scaled) ** 2)
+            # Calculate predicted clean image (xhat_0)
+            xhat = (1.0 / sqrt_alphas_cumprod[t]) * xt - (sqrt_1m_alphas_cumprod[t] / sqrt_alphas_cumprod[t]) * eps
+            l2 = torch.sum((forward_operator(xhat) - y_scaled) ** 2)
             
         elif mode == "DPS_yt":
             noise_y = forward_operator(eps.detach())
             y_t = (sqrt_alphas_cumprod[t] * y_scaled) + (sqrt_1m_alphas_cumprod[t] * noise_y)
-            loss = torch.sum((forward_operator(xt) - y_t) ** 2)
+            l2 = torch.sum((forward_operator(xt) - y_t) ** 2)
 
-        grad_l2 = torch.autograd.grad(outputs=loss, inputs=xt)[0]
+        grad_l2 = torch.autograd.grad(outputs=l2, inputs=xt)[0]
 
-        # 5c. Standard DDPM backward step (mu)
+        # 5cStandard DDPM backward step (mu)
         mu = (1.0 / torch.sqrt(alphas[t])) * (xt - (betas[t] / torch.sqrt(betabar[t])) * eps)
 
-        # 5d. DPS Gradient Correction
-        loss_val = loss.detach().item()
-        zetat = cfg.lambda_ * (loss_val ** -0.5) if loss_val > 0 else 0.0
-        noise = torch.randn_like(xt) if t > 0 else torch.zeros_like(xt)
+        # DPS Gradient Correction
+        zetat = 0.1 * torch.pow(l2, -0.5)
 
-        xt = mu + torch.sqrt(betas[t]) * noise - zetat * grad_l2
+        # Final backward update combining DDPM, additive noise, and DPS guidance
+        xt = (mu + torch.sqrt(betas[t]) * torch.randn_like(xt) - zetat * grad_l2).detach()
 
     # 6. Post-processing and Metrics
     x_0 = xt.detach() / 2.0 + 0.5

@@ -607,7 +607,6 @@ def run_dps_deblur(
     loss_fn_vgg = None
     if hp.calc_LPIPS:
         import lpips
-
         loss_fn_vgg = lpips.LPIPS(net="vgg").to(device)
 
     # 3. Image + degradation loading
@@ -647,12 +646,11 @@ def run_dps_deblur(
         model_out = model(xt, t_tensor)
         eps = model_out[:, :3, :, :]
 
-        # clean image estimation 
-        xhat = (1.0 / sqrt_alphas_cumprod[t]) * xt - (sqrt_1m_alphas_cumprod[t] / sqrt_alphas_cumprod[t]) * eps
-
         # l2 loss depending on mdoe
         if mode == "DPS_y0":
             # Standard DPS: Compare predicted clean image (mapped to [0,1]) to clean measurement
+            # clean image estimation 
+            xhat = (1.0 / sqrt_alphas_cumprod[t]) * xt - (sqrt_1m_alphas_cumprod[t] / sqrt_alphas_cumprod[t]) * eps
             l2 = torch.sum((blur_operator(xhat) - y_scaled) ** 2)
 
         elif mode == "DPS_yt":
@@ -673,6 +671,7 @@ def run_dps_deblur(
 
         # Final backward update combining DDPM, additive noise, and DPS guidance
         xt = (mu + torch.sqrt(betas[t]) * torch.randn_like(xt) - zetat * grad_l2).detach()
+
 
     x_0 = xt.detach() / 2.0 + 0.5
     x_0 = x_0.clamp(0.0, 1.0)
