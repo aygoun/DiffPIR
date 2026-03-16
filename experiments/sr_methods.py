@@ -30,7 +30,7 @@ from utils import utils_model
 from utils import utils_sisr as sr
 from utils.utils_resizer import Resizer
 
-from .common import ImageResult, MethodConfig
+from .common import DegradedInput, ImageResult, MethodConfig, load_image_paths
 from .pnp_priors import GaussianDenoiser, DRUNetDenoiser, Denoiser
 
 
@@ -304,6 +304,44 @@ def _make_sr_observation(
     return img_L, y, x_np, down_sample, up_sample
 
 
+def _load_degraded_obs(
+    degraded_input: DegradedInput,
+    img_H: np.ndarray,
+    sf: int,
+    hp: Any,
+    device: torch.device,
+    logger: logging.Logger,
+) -> Tuple[np.ndarray, torch.Tensor, np.ndarray, Any, Any]:
+    """
+    Load a pre-degraded (low-resolution) image from disk instead of synthesising it.
+
+    Returns the same tuple as `_make_sr_observation`:
+        img_L      : float32 numpy array in [0, 1] (LR image, for saving)
+        y          : (1, C, h, w) torch tensor on *device* in [0, 1]
+        x_np       : float32 numpy array at HR size (bicubic-upsampled LR, for init)
+        down_sample: cubic downsampler callable, or None when sr_mode != "cubic"
+        up_sample  : cubic upsampler callable, or None when sr_mode != "cubic"
+    """
+    logger.info("Loading pre-degraded (LR) image from %s", degraded_input.degraded_path)
+    img_L = util.uint2single(util.imread_uint(degraded_input.degraded_path, n_channels=3))
+    y = util.single2tensor4(img_L).to(device)
+
+    h_lr, w_lr = img_L.shape[:2]
+    x_np = cv2.resize(img_L, (w_lr * sf, h_lr * sf), interpolation=cv2.INTER_CUBIC)
+    if np.ndim(x_np) == 2:
+        x_np = x_np[..., None]
+
+    down_sample = None
+    up_sample = None
+    if getattr(hp, "sr_mode", "blur") == "cubic":
+        img_H_tensor = np.transpose(img_H, (2, 0, 1))
+        img_H_tensor = torch.from_numpy(img_H_tensor)[None, :, :, :].to(device) / 255.0
+        down_sample = Resizer(img_H_tensor.shape, 1 / sf).to(device)
+        up_sample = partial(F.interpolate, scale_factor=sf)
+
+    return img_L, y, x_np, down_sample, up_sample
+
+
 def _compute_lpips(
     loss_fn_vgg: Any,
     x_est: torch.Tensor,
@@ -352,7 +390,11 @@ def _save_outputs(
 # ===========================================================================
 
 
-def run_diffpir_sr(img_path: str, cfg: MethodConfig) -> ImageResult:
+def run_diffpir_sr(
+    img_path: str,
+    cfg: MethodConfig,
+    degraded_input: Optional[DegradedInput] = None,
+) -> ImageResult:
     """
     Single-image DiffPIR super-resolution runner.
 
@@ -452,9 +494,14 @@ def run_diffpir_sr(img_path: str, cfg: MethodConfig) -> ImageResult:
     img_H = util.imread_uint(img_path, n_channels=n_channels)
     img_H = util.modcrop(img_H, sf)
 
-    img_L, y, x_np, down_sample, up_sample = _make_sr_observation(
-        img_H, k, sf, hp, device, logger
-    )
+    if degraded_input is not None:
+        img_L, y, x_np, down_sample, up_sample = _load_degraded_obs(
+            degraded_input, img_H, sf, hp, device, logger
+        )
+    else:
+        img_L, y, x_np, down_sample, up_sample = _make_sr_observation(
+            img_H, k, sf, hp, device, logger
+        )
 
     # Initialise x at t_start from bicubic-upsampled LR
     x = util.single2tensor4(x_np).to(device)
@@ -618,7 +665,12 @@ def run_diffpir_sr(img_path: str, cfg: MethodConfig) -> ImageResult:
     )
 
 
-def run_dps_sr(img_path: str, cfg: MethodConfig, mode: str = "DPS_y0") -> ImageResult:
+def run_dps_sr(
+    img_path: str,
+    cfg: MethodConfig,
+    mode: str = "DPS_y0",
+    degraded_input: Optional[DegradedInput] = None,
+) -> ImageResult:
     """
     Single-image DPS SR runner.
 
@@ -673,8 +725,13 @@ def run_dps_sr(img_path: str, cfg: MethodConfig, mode: str = "DPS_y0") -> ImageR
     img_H = util.modcrop(img_H, sf)
 
     k = _load_sr_kernel(sf, hp.classical_degradation)
-    img_L, y, x_np, down_sample, up_sample = _make_sr_observation(img_H, k, sf, hp, device, logger)
-    
+    if degraded_input is not None:
+        img_L, y, x_np, down_sample, up_sample = _load_degraded_obs(
+            degraded_input, img_H, sf, hp, device, logger
+        )
+    else:
+        img_L, y, x_np, down_sample, up_sample = _make_sr_observation(img_H, k, sf, hp, device, logger)
+
     # Scale LR observation y to [-1, 1]
     y_scaled = y * 2.0 - 1.0
 
@@ -752,7 +809,11 @@ def run_dps_sr(img_path: str, cfg: MethodConfig, mode: str = "DPS_y0") -> ImageR
     return ImageResult(psnr=float(psnr), psnr_y=float(psnr_y), image_path=img_path, lpips=lpips_score, output_path=out_est)
 
 
-def run_pnp_sr(img_path: str, cfg: MethodConfig) -> ImageResult:
+def run_pnp_sr(
+    img_path: str,
+    cfg: MethodConfig,
+    degraded_input: Optional[DegradedInput] = None,
+) -> ImageResult:
     """
     Plug-and-play super-resolution runner using DRUNet or another `Denoiser` prior.
 
@@ -798,9 +859,14 @@ def run_pnp_sr(img_path: str, cfg: MethodConfig) -> ImageResult:
         k.shape,
     )
 
-    img_L, y, x_np, down_sample, up_sample = _make_sr_observation(
-        img_H, k, sf, deg, device, logger
-    )
+    if degraded_input is not None:
+        img_L, y, x_np, down_sample, up_sample = _load_degraded_obs(
+            degraded_input, img_H, sf, deg, device, logger
+        )
+    else:
+        img_L, y, x_np, down_sample, up_sample = _make_sr_observation(
+            img_H, k, sf, deg, device, logger
+        )
 
     # Denoiser selection
     denoiser: Denoiser
@@ -914,3 +980,62 @@ def run_pnp_sr(img_path: str, cfg: MethodConfig) -> ImageResult:
         lpips=lpips_score,
         output_path=out_est,
     )
+
+
+# ===========================================================================
+# Degraded image generation
+# ===========================================================================
+
+
+def generate_sr_inputs(
+    testset_root: str,
+    cfg: MethodConfig,
+    output_dir: str = "outputs/lr",
+    overwrite: bool = False,
+) -> Dict[str, DegradedInput]:
+    """Downsample every image in *testset_root* to create LR observations and
+    save them to *output_dir*.
+
+    Uses the identical downsampling pipeline (blur or cubic mode, scale factor,
+    noise level) as the runners, so the saved images are plug-and-play
+    replacements for the internally synthesised LR observations.
+
+    Args:
+        testset_root: Directory containing the ground-truth images.
+        cfg: A :class:`MethodConfig` for the SR task (e.g. loaded from
+            ``configs/sr.yaml``).  The scale factor, SR mode, and noise level
+            are read from ``cfg.sf`` and ``cfg.extra``.
+        output_dir: Directory where the LR images will be saved.
+        overwrite: When *False* (default) existing files are left untouched.
+
+    Returns:
+        A ``dict`` mapping each image basename (e.g. ``"69037.png"``) to a
+        :class:`DegradedInput` whose ``degraded_path`` points to the saved LR
+        image.  Pass this dict directly to :func:`compare_task` as
+        ``degraded_inputs``.
+    """
+    sf = cfg.sf
+    hp = _build_hparams_from_cfg(cfg)
+    device = torch.device("cpu")
+    logger = _make_logger("generate_sr")
+
+    k = _load_sr_kernel(sf, hp.classical_degradation)
+    util.mkdir(output_dir)
+
+    result: Dict[str, DegradedInput] = {}
+    for img_path in load_image_paths(testset_root):
+        img_name, ext = os.path.splitext(os.path.basename(img_path))
+        out_path = os.path.join(output_dir, f"{img_name}_x{sf}_LR{ext}")
+
+        if not overwrite and os.path.exists(out_path):
+            logger.info("Skipping %s (already exists)", out_path)
+        else:
+            img_H = util.imread_uint(img_path, n_channels=3)
+            img_H = util.modcrop(img_H, sf)
+            img_L, _, _, _, _ = _make_sr_observation(img_H, k, sf, hp, device, logger)
+            util.imsave(util.single2uint(img_L.squeeze()), out_path)
+            logger.info("Saved LR image to %s", out_path)
+
+        result[os.path.basename(img_path)] = DegradedInput(degraded_path=out_path)
+
+    return result

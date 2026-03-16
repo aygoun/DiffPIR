@@ -1,13 +1,30 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Sequence
+from typing import Callable, Dict, List, Optional, Sequence
 import os
 import yaml
 import numpy as np
 import torch
 
 from utils import utils_image as util
+
+
+@dataclass
+class DegradedInput:
+    """A pre-degraded observation to pass directly to a restoration runner.
+
+    When provided, the runner skips its internal synthetic degradation step
+    and loads the observation from disk instead.
+
+    Attributes:
+        degraded_path: Path to the pre-degraded image (blurred / LR / masked).
+        mask_path: Path to a binary mask PNG (inpainting only). Required when
+            used with inpainting runners; ignored by deblur and SR runners.
+    """
+
+    degraded_path: str
+    mask_path: Optional[str] = None
 
 
 @dataclass
@@ -95,27 +112,36 @@ def run_experiment(
     *,
     method_config: MethodConfig,
     image_paths: Sequence[str],
-    method_fn: Callable[[str, MethodConfig], ImageResult],
+    method_fn: Callable[[str, MethodConfig, Optional[DegradedInput]], ImageResult],
     output_root: str | None = None,
+    degraded_inputs: Optional[Sequence[Optional[DegradedInput]]] = None,
 ) -> RunResult:
     """
     Run a single method over all images in `image_paths`.
 
     The `method_fn` is responsible for:
-    - Loading the image.
+    - Loading the ground-truth image (always from `img_path`, for metrics).
+    - Optionally loading a pre-degraded observation from `degraded_input`.
     - Running the restoration method.
     - Saving any visual outputs to disk (if desired).
     - Returning per-image metrics.
+
+    Args:
+        degraded_inputs: Optional sequence parallel to `image_paths`. Each
+            element is either a `DegradedInput` (pre-degraded observation to
+            use instead of the synthetic one) or ``None`` (use the default
+            internal degradation for that image).
     """
 
     if output_root is not None:
         ensure_output_dir(output_root)
 
     image_results: Dict[str, ImageResult] = {}
-
-    for img_path in image_paths:
+    for i, img_path in enumerate(image_paths):
         img_name = os.path.basename(img_path)
-        image_results[img_name] = method_fn(img_path, method_config)
+        deg = degraded_inputs.get(img_path, None)
+        print("Found degraded input for image: ", img_name, "we use: ", deg)
+        image_results[img_name] = method_fn(img_path, method_config, deg)
 
     return RunResult(
         task=method_config.task,

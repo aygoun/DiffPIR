@@ -26,7 +26,7 @@ from utils import utils_image as util
 from utils import utils_model
 from utils.utils_inpaint import mask_generator
 
-from .common import ImageResult, MethodConfig
+from .common import DegradedInput, ImageResult, MethodConfig, load_image_paths
 from .pnp_priors import GaussianDenoiser, DRUNetDenoiser, DiffBIRDenoiser, Denoiser
 
 
@@ -255,6 +255,40 @@ def _make_inpaint_observation(
     return img_L, y, mask_tensor
 
 
+def _load_degraded_obs(
+    degraded_input: DegradedInput,
+    device: torch.device,
+    logger: logging.Logger,
+) -> Tuple[np.ndarray, torch.Tensor, torch.Tensor]:
+    """
+    Load a pre-degraded (masked) image and its mask from disk instead of
+    synthesising them.
+
+    Returns the same tuple as `_make_inpaint_observation`:
+        img_L      : float32 numpy array in [0, 1]  (masked image, for saving)
+        y          : (1, C, H, W) torch tensor on *device* in [-1, 1]
+        mask_tensor: (1, C, H, W) float32 torch tensor in {0, 1}
+
+    Raises:
+        ValueError: when ``degraded_input.mask_path`` is None.
+    """
+    if degraded_input.mask_path is None:
+        raise ValueError(
+            "DegradedInput.mask_path must be set when using pre-degraded inputs "
+            "for inpainting (the runner needs the mask for data-consistency updates)."
+        )
+    logger.info("Loading pre-degraded (masked) image from %s", degraded_input.degraded_path)
+    logger.info("Loading mask from %s", degraded_input.mask_path)
+
+    img_L = util.uint2single(util.imread_uint(degraded_input.degraded_path, n_channels=3))
+    y = util.single2tensor4(img_L).to(device) * 2 - 1
+
+    mask_np = util.imread_uint(degraded_input.mask_path, n_channels=3).astype(bool).astype(np.float32)
+    mask_tensor = util.single2tensor4(mask_np).to(device)
+
+    return img_L, y, mask_tensor
+
+
 def _compute_lpips(
     loss_fn_vgg: Any,
     x_est: torch.Tensor,
@@ -302,7 +336,11 @@ def _save_outputs(
 # ===========================================================================
 
 
-def run_diffpir_inpaint(img_path: str, cfg: MethodConfig) -> ImageResult:
+def run_diffpir_inpaint(
+    img_path: str,
+    cfg: MethodConfig,
+    degraded_input: Optional[DegradedInput] = None,
+) -> ImageResult:
     """
     Single-image DiffPIR inpainting runner.
 
@@ -391,10 +429,13 @@ def run_diffpir_inpaint(img_path: str, cfg: MethodConfig) -> ImageResult:
     logger.info("Loading ground-truth image from %s", img_path)
     img_H = util.imread_uint(img_path, n_channels=n_channels)
 
-    mask_np = _build_mask(hp, img_H, logger)
-    img_L, y, mask = _make_inpaint_observation(
-        img_H, mask_np, hp.noise_level_img, device, logger
-    )
+    if degraded_input is not None:
+        img_L, y, mask = _load_degraded_obs(degraded_input, device, logger)
+    else:
+        mask_np = _build_mask(hp, img_H, logger)
+        img_L, y, mask = _make_inpaint_observation(
+            img_H, mask_np, hp.noise_level_img, device, logger
+        )
 
     # Initialise x at t_start conditioned on y ([-1, 1])
     t_y = utils_model.find_nearest(reduced_alpha_cumprod, 2 * hp.noise_level_img)
@@ -523,7 +564,10 @@ def run_diffpir_inpaint(img_path: str, cfg: MethodConfig) -> ImageResult:
 
 
 def run_dps_inpaint(
-    img_path: str, cfg: MethodConfig, mode: str = "DPS_y0"
+    img_path: str,
+    cfg: MethodConfig,
+    mode: str = "DPS_y0",
+    degraded_input: Optional[DegradedInput] = None,
 ) -> ImageResult:
     """
     Single-image DPS inpainting runner.
@@ -574,9 +618,12 @@ def run_dps_inpaint(
     logger.info("Loading ground-truth image from %s", img_path)
     img_H = util.imread_uint(img_path, n_channels=n_channels)
 
-    mask_np = _build_mask(hp, img_H, logger)
-    # Note: _make_inpaint_observation returns 'y' already in the [-1, 1] domain!
-    img_L, y, mask_tensor = _make_inpaint_observation(img_H, mask_np, hp.noise_level_img, device, logger)
+    if degraded_input is not None:
+        img_L, y, mask_tensor = _load_degraded_obs(degraded_input, device, logger)
+    else:
+        mask_np = _build_mask(hp, img_H, logger)
+        # Note: _make_inpaint_observation returns 'y' already in the [-1, 1] domain!
+        img_L, y, mask_tensor = _make_inpaint_observation(img_H, mask_np, hp.noise_level_img, device, logger)
 
     # 4. Build Forward Operator (A) for DPS Data Consistency
     def mask_operator(tensor):
@@ -643,7 +690,11 @@ def run_dps_inpaint(
     return ImageResult(psnr=float(psnr), image_path=img_path, lpips=lpips_score, output_path=out_est)
 
 
-def run_pnp_inpaint(img_path: str, cfg: MethodConfig) -> ImageResult:
+def run_pnp_inpaint(
+    img_path: str,
+    cfg: MethodConfig,
+    degraded_input: Optional[DegradedInput] = None,
+) -> ImageResult:
     """
     Plug-and-play inpainting runner using DRUNet or another `Denoiser` prior.
 
@@ -678,10 +729,13 @@ def run_pnp_inpaint(img_path: str, cfg: MethodConfig) -> ImageResult:
     logger.info("Loading ground-truth image from %s", img_path)
     img_H = util.imread_uint(img_path, n_channels=n_channels)
 
-    mask_np = _build_mask(deg, img_H, logger)
-    img_L, y_diffusion, mask_tensor = _make_inpaint_observation(
-        img_H, mask_np, deg.noise_level_img, device, logger
-    )
+    if degraded_input is not None:
+        img_L, y_diffusion, mask_tensor = _load_degraded_obs(degraded_input, device, logger)
+    else:
+        mask_np = _build_mask(deg, img_H, logger)
+        img_L, y_diffusion, mask_tensor = _make_inpaint_observation(
+            img_H, mask_np, deg.noise_level_img, device, logger
+        )
 
     # Work in [0, 1] space: convert y from [-1, 1] back to [0, 1]
     y = y_diffusion / 2 + 0.5
@@ -792,3 +846,66 @@ def run_pnp_inpaint(img_path: str, cfg: MethodConfig) -> ImageResult:
     return ImageResult(
         psnr=float(psnr), image_path=img_path, lpips=lpips_score, output_path=out_est
     )
+
+
+# ===========================================================================
+# Degraded image generation
+# ===========================================================================
+
+
+def generate_inpaint_inputs(
+    testset_root: str,
+    cfg: MethodConfig,
+    output_dir: str = "outputs/masked",
+    overwrite: bool = False,
+) -> Dict[str, DegradedInput]:
+    """Apply the inpainting mask from *cfg* to every image in *testset_root*
+    and save the masked images and their masks to *output_dir*.
+
+    Uses the identical mask generation and noise pipeline as the runners, so
+    the saved images are plug-and-play replacements for the internally
+    synthesised observations.
+
+    Args:
+        testset_root: Directory containing the ground-truth images.
+        cfg: A :class:`MethodConfig` for the inpaint task (e.g. loaded from
+            ``configs/inpaint.yaml``).  The mask type and noise level are read
+            from ``cfg.extra``.
+        output_dir: Directory where the masked images and masks will be saved.
+        overwrite: When *False* (default) existing files are left untouched.
+
+    Returns:
+        A ``dict`` mapping each image basename (e.g. ``"69037.png"``) to a
+        :class:`DegradedInput` with both ``degraded_path`` (masked image) and
+        ``mask_path`` (binary mask).  Pass this dict directly to
+        :func:`compare_task` as ``degraded_inputs``.
+    """
+    hp = _build_hparams_from_cfg(cfg)
+    device = torch.device("cpu")
+    logger = _make_logger("generate_inpaint")
+
+    util.mkdir(output_dir)
+
+    result: Dict[str, DegradedInput] = {}
+    for img_path in load_image_paths(testset_root):
+        img_name, ext = os.path.splitext(os.path.basename(img_path))
+        masked_path = os.path.join(output_dir, f"{img_name}_masked{ext}")
+        mask_path = os.path.join(output_dir, f"{img_name}_mask{ext}")
+
+        if not overwrite and os.path.exists(masked_path) and os.path.exists(mask_path):
+            logger.info("Skipping %s (already exists)", masked_path)
+        else:
+            img_H = util.imread_uint(img_path, n_channels=3)
+            mask_np = _build_mask(hp, img_H, logger)
+            img_L, _, _ = _make_inpaint_observation(img_H, mask_np, hp.noise_level_img, device, logger)
+            util.imsave(util.single2uint(img_L), masked_path)
+            util.imsave(util.single2uint(mask_np), mask_path)
+            logger.info("Saved masked image to %s", masked_path)
+            logger.info("Saved mask to %s", mask_path)
+
+        result[os.path.basename(img_path)] = DegradedInput(
+            degraded_path=masked_path,
+            mask_path=mask_path,
+        )
+
+    return result
