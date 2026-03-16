@@ -561,10 +561,8 @@ def run_dps_inpaint(
     args = utils_model.create_argparser(model_config).parse_args([])
     model, diffusion = create_model_and_diffusion(**args_to_dict(args, model_and_diffusion_defaults().keys()))
     model.load_state_dict(torch.load(args.model_path, map_location="cpu"))
-    model.eval()
-    for _, v in model.named_parameters():
-        v.requires_grad = True
     model = model.to(device)
+    model.eval()  
 
     loss_fn_vgg = None
     if hp.calc_LPIPS:
@@ -595,10 +593,9 @@ def run_dps_inpaint(
         
         # CRITICAL: Detach and require grad at the start of EVERY step
         xt = xt.detach().requires_grad_()
-        t_tensor = torch.tensor([t], device=device)
 
         # 5a. Unet Prediction
-        model_out = model(xt, t_tensor)
+        model_out = model(xt, torch.tensor(t, device=device).unsqueeze(0))
         eps = model_out[:, :3, :, :]
 
         # 5b. Data consistency (L2 Loss)

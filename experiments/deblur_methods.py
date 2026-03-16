@@ -599,10 +599,8 @@ def run_dps_deblur(
         **args_to_dict(args, model_and_diffusion_defaults().keys())
     )
     model.load_state_dict(torch.load(args.model_path, map_location="cpu"))
-    model.eval()
-    for _, v in model.named_parameters():
-        v.requires_grad = True
     model = model.to(device)
+    model.eval()    
 
     loss_fn_vgg = None
     if hp.calc_LPIPS:
@@ -640,10 +638,9 @@ def run_dps_deblur(
     for i, t in tqdm(enumerate(reversed(range(hp.num_train_timesteps))), desc="DPS Deblurring"):
 
         xt = xt.detach().requires_grad_()
-        t_tensor = torch.tensor([t], device=device)
 
         # Noise prediction
-        model_out = model(xt, t_tensor)
+        model_out = model(xt, torch.tensor(t, device=device).unsqueeze(0))
         eps = model_out[:, :3, :, :]
 
         # l2 loss depending on mdoe
