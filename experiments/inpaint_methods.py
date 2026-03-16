@@ -571,6 +571,37 @@ def run_diffpir_inpaint(
     )
 
 
+import tempfile
+import IPython
+import matplotlib.pyplot as plt
+
+def viewimage(im, normalize=True,vmin=-1,vmax=1,z=1,order=0,titre='',displayfilename=False):
+    im = im.detach().cpu().permute(2,3,1,0).squeeze()
+    imin= np.array(im).astype(np.float32)
+    channel_axis = 2 if len(im.shape)>2 else None
+    if z!=1:
+        from skimage.transform import rescale
+        imin = rescale(imin, z, order=order, channel_axis=channel_axis)
+    if normalize:
+        if vmin is None:
+            vmin = imin.min()
+        if vmax is None:
+            vmax = imin.max()
+        if np.abs(vmax-vmin)>1e-10:
+            imin = (imin.clip(vmin,vmax)-vmin)/(vmax-vmin)
+        else:
+            imin = vmin
+    else:
+        imin=imin.clip(0,255)/255
+    imin=(imin*255).astype(np.uint8)
+    filename=tempfile.mktemp(titre+'.png')
+    if displayfilename:
+        print (filename)
+    plt.imsave(filename, imin, cmap='gray')
+    IPython.display.display(IPython.display.Image(filename))
+
+
+
 def run_dps_inpaint(
     img_path: str,
     cfg: MethodConfig,
@@ -670,12 +701,14 @@ def run_dps_inpaint(
         model_out = model(xt, torch.tensor(t, device=device).unsqueeze(0))
         eps = model_out[:, :3, :, :]
 
+        # Calculate predicted clean image (xhat_0)
+        xhat = (1.0 / sqrt_alphas_cumprod[t]) * xt - (
+            sqrt_1m_alphas_cumprod[t] / sqrt_alphas_cumprod[t]
+        ) * eps
+
         # 5b. Data consistency (L2 Loss)
         if mode == "DPS_y0":
-            # Calculate predicted clean image (xhat_0)
-            xhat = (1.0 / sqrt_alphas_cumprod[t]) * xt - (
-                sqrt_1m_alphas_cumprod[t] / sqrt_alphas_cumprod[t]
-            ) * eps
+            
             l2 = torch.sum((mask_operator(xhat) - y) ** 2)
 
         elif mode == "DPS_yt":
@@ -697,6 +730,11 @@ def run_dps_inpaint(
         xt = (
             mu + torch.sqrt(betas[t]) * torch.randn_like(xt) - zetat * grad_l2
         ).detach()
+
+        # Display
+        if i==0 or t%100==0 or t==0:
+            print('Iteration:', i, '; Discrete time:', t)
+            viewimage(torch.cat((xt, xhat, y), dim=3))
 
     # 6. Post-processing and Metrics
     # Standard DPS doesn't forcibly inject the exact known pixels back in, but for best metric performance in inpainting, it is standard practice.
