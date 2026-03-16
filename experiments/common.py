@@ -135,12 +135,12 @@ def run_experiment(
 
     if output_root is not None:
         ensure_output_dir(output_root)
+    print(degraded_inputs)
 
     image_results: Dict[str, ImageResult] = {}
     for i, img_path in enumerate(image_paths):
         img_name = os.path.basename(img_path)
-        deg = degraded_inputs.get(img_path, None)
-        print("Found degraded input for image: ", img_name, "we use: ", deg)
+        deg = degraded_inputs.get(img_name, None)
         image_results[img_name] = method_fn(img_path, method_config, deg)
 
     return RunResult(
