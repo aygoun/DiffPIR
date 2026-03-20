@@ -18,3 +18,4 @@ main_ddpir_sisr_x0.py
 .DS_Store
 .venv
 outputs/
+datasets/

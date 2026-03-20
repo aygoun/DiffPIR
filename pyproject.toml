@@ -21,6 +21,9 @@ dependencies = [
   "tqdm>=4.67.3",
   "huggingface-hub>=1.6.0",
   "safetensors>=0.7.0",
+  "pandas>=3.0.1",
+  "ipython>=9.10.0",
+  "kagglehub>=1.0.0",
 ]
 
 [build-system]
