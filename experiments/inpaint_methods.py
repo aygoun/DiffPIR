@@ -344,6 +344,37 @@ def _save_outputs(
 # ===========================================================================
 
 
+import tempfile
+import IPython
+import matplotlib.pyplot as plt
+
+def viewimage(im, normalize=True,vmin=-1,vmax=1,z=1,order=0,titre='',displayfilename=False):
+    im = im.detach().cpu().permute(2,3,1,0).squeeze()
+    imin= np.array(im).astype(np.float32)
+    channel_axis = 2 if len(im.shape)>2 else None
+    if z!=1:
+        from skimage.transform import rescale
+        imin = rescale(imin, z, order=order, channel_axis=channel_axis)
+    if normalize:
+        if vmin is None:
+            vmin = imin.min()
+        if vmax is None:
+            vmax = imin.max()
+        if np.abs(vmax-vmin)>1e-10:
+            imin = (imin.clip(vmin,vmax)-vmin)/(vmax-vmin)
+        else:
+            imin = vmin
+    else:
+        imin=imin.clip(0,255)/255
+    imin=(imin*255).astype(np.uint8)
+    filename=tempfile.mktemp(titre+'.png')
+    if displayfilename:
+        print (filename)
+    plt.imsave(filename, imin, cmap='gray')
+    IPython.display.display(IPython.display.Image(filename))
+
+
+
 def run_diffpir_inpaint(
     img_path: str,
     cfg: MethodConfig,
@@ -538,6 +569,8 @@ def run_diffpir_inpaint(
                     - sqrt_ae**2 * sqrt_1m_alphas_cumprod[t_im1] ** 2
                 ) * torch.randn_like(x)
 
+            # viewimage(torch.cat((x0, y), dim=3))
+
         x_0 = x / 2 + 0.5
 
     assert x_0 is not None
@@ -569,37 +602,6 @@ def run_diffpir_inpaint(
     return ImageResult(
         psnr=float(psnr), image_path=img_path, lpips=lpips_score, output_path=out_est
     )
-
-
-import tempfile
-import IPython
-import matplotlib.pyplot as plt
-
-def viewimage(im, normalize=True,vmin=-1,vmax=1,z=1,order=0,titre='',displayfilename=False):
-    im = im.detach().cpu().permute(2,3,1,0).squeeze()
-    imin= np.array(im).astype(np.float32)
-    channel_axis = 2 if len(im.shape)>2 else None
-    if z!=1:
-        from skimage.transform import rescale
-        imin = rescale(imin, z, order=order, channel_axis=channel_axis)
-    if normalize:
-        if vmin is None:
-            vmin = imin.min()
-        if vmax is None:
-            vmax = imin.max()
-        if np.abs(vmax-vmin)>1e-10:
-            imin = (imin.clip(vmin,vmax)-vmin)/(vmax-vmin)
-        else:
-            imin = vmin
-    else:
-        imin=imin.clip(0,255)/255
-    imin=(imin*255).astype(np.uint8)
-    filename=tempfile.mktemp(titre+'.png')
-    if displayfilename:
-        print (filename)
-    plt.imsave(filename, imin, cmap='gray')
-    IPython.display.display(IPython.display.Image(filename))
-
 
 
 def run_dps_inpaint(
@@ -731,16 +733,26 @@ def run_dps_inpaint(
             mu + torch.sqrt(betas[t]) * torch.randn_like(xt) - zetat * grad_l2
         ).detach()
 
-        # Display
-        if i==0 or t%100==0 or t==0:
-            print('Iteration:', i, '; Discrete time:', t)
-            viewimage(torch.cat((xt, xhat, y), dim=3))
+        # # --- NEW: RePaint-style mask enforcement inside the loop ---
+        # # We need to noise the clean ground truth 'y' to the NEXT step (t-1)
+        # # Note: 'y' is currently in [-1, 1].
+        # if t > 0:
+        #     noise_for_y = torch.randn_like(y)
+        #     y_noisy = (sqrt_alphas_cumprod[t-1] * y) + (sqrt_1m_alphas_cumprod[t-1] * noise_for_y)
+        #     xt = (xt * (1 - mask_tensor)) + (y_noisy * mask_tensor)
+        # else:
+        #     xt = (xt * (1 - mask_tensor)) + (y * mask_tensor)
+
+        # # Display
+        # if i==0 or t%100==0 or t==0:
+        #     print('Iteration:', i, '; Discrete time:', t)
+        #     viewimage(torch.cat((xt, xhat, y), dim=3))
 
     # 6. Post-processing and Metrics
     # Standard DPS doesn't forcibly inject the exact known pixels back in, but for best metric performance in inpainting, it is standard practice.
     x_final = xt.detach() / 2.0 + 0.5
-    y_0_1 = y / 2.0 + 0.5
-    x_final = (x_final * (1 - mask_tensor)) + (y_0_1 * mask_tensor)
+    # y_0_1 = y / 2.0 + 0.5
+    # x_final = (x_final * (1 - mask_tensor)) + (y_0_1 * mask_tensor)
     x_0 = x_final.clamp(0.0, 1.0)
 
     logger.info("Reverse diffusion finished for %s", img_name)
