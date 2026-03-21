@@ -17,6 +17,7 @@ import argparse
 import csv
 import logging
 import math
+import multiprocessing
 import os
 import sys
 import time
@@ -38,12 +39,12 @@ from experiments.common import (
     load_image_paths,
 )
 
-# Download latest version
-path = kagglehub.dataset_download("ashwingupta3012/human-faces")
-print("Path to dataset files:", path)
-# Move dataset to datasets folder
-os.makedirs(os.path.join(_HERE, "datasets"), exist_ok=True)
-shutil.move(path, os.path.join(_HERE, "datasets", "human-faces"))
+# # Download latest version
+# path = kagglehub.dataset_download("ashwingupta3012/human-faces")
+# print("Path to dataset files:", path)
+# # Move dataset to datasets folder
+# os.makedirs(os.path.join(_HERE, "datasets"), exist_ok=True)
+# shutil.move(path, os.path.join(_HERE, "datasets", "human-faces"))
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Registry  –  (task, method_key) → (yaml_path, runner_callable)
@@ -413,7 +414,10 @@ def main() -> None:
             logging.info("  elapsed %.1f s", time.time() - t0)
     else:
         # ── parallel via ProcessPoolExecutor ────────────────────────────────
-        with ProcessPoolExecutor(max_workers=args.workers) as pool:
+        with ProcessPoolExecutor(
+            max_workers=args.workers,
+            mp_context=multiprocessing.get_context("spawn"),
+        ) as pool:
             futures = {
                 pool.submit(_run_combo, task, method, image_paths): (task, method)
                 for task, method in combos
