@@ -30,7 +30,7 @@ from guided_diffusion.script_util import (
 )
 
 from .common import DegradedInput, ImageResult, MethodConfig, load_image_paths
-from .pnp_priors import GaussianDenoiser, DRUNetDenoiser, Denoiser
+from .pnp_priors import GaussianDenoiser, DRUNetDenoiser, Denoiser, DiffBIRDenoiser
 
 
 # ===========================================================================
@@ -803,6 +803,11 @@ def run_pnp_deblur(
     if hp.denoiser.lower() == "drunet":
         denoiser = DRUNetDenoiser(weights_path=str(hp.drunet_weights_path))
         logger.info("Using DRUNet denoiser from %s", hp.drunet_weights_path)
+    elif hp.denoiser.lower() == "diffbir":
+        denoiser = DiffBIRDenoiser(
+            weights_path=str(getattr(hp, "diffbir_weights_path", ""))
+        )
+        logger.info("Using DiffBIR Stage-1 SwinIR denoiser (blind)")
     else:
         denoiser = GaussianDenoiser(
             kernel_size=int(hp.gaussian_kernel_size), sigma=float(hp.gaussian_sigma)

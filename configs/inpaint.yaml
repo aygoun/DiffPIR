@@ -134,13 +134,6 @@ pnp_drunet:
   output_root: "outputs"
 
 pnp_diffbir:
-  # PnP inpainting with DiffBIR Stage-1 (SwinIR) as the prior.
-  #
-  # The DiffBIR Stage-1 SwinIR is a *blind* restorer: it does not receive a
-  # noise-level signal, so denoiser_sigma only governs the PnP rho/lambda
-  # schedule — not the model itself.  Weights are downloaded automatically
-  # from lxq007/DiffBIR on Hugging Face (general_swinir_v1.ckpt) if
-  # diffbir_weights_path is left empty.
   task: inpaint
   name: pnp_diffbir
   generate_mode: pnp_diffbir
@@ -160,19 +153,30 @@ pnp_diffbir:
   # PnP hyper-parameters
   denoiser: diffbir
   num_iters: 20
-  # For inpaint with noise_level_img=0, a hard pixel constraint is used for
-  # known pixels regardless of rho.  denoiser_sigma here mainly affects how
-  # strongly the denoiser is applied in unknown (masked) regions.
   denoiser_sigma: 0.05
-
-  # ---------------------------------------------------------------------------
-  # DiffBIR Stage-1 weights
-  # ---------------------------------------------------------------------------
-  # Leave empty to auto-download general_swinir_v1.ckpt from lxq007/DiffBIR.
-  # Set to a local .ckpt / .pth path to override, e.g. model_zoo/general_swinir_v1.ckpt
   diffbir_weights_path: ""
 
   # Output and metrics
+  calc_LPIPS: true
+  save_L: true
+  save_E: true
+  clamp: true
+  output_root: "outputs"
+
+pnp_diffbir:
+  task: inpaint
+  name: pnp_diffbir
+  generate_mode: pnp_diffbir
+
+  lambda_: 1.0
+  zeta: 0.0
+  sf: 1
+
+  denoiser: diffbir
+  num_iters: 20
+  denoiser_sigma: 0.05
+  diffbir_weights_path: ""
+
   calc_LPIPS: true
   save_L: true
   save_E: true

@@ -39,7 +39,7 @@ from experiments.common import (
     load_image_paths,
 )
 
-# # Download latest version
+# Download latest version
 # path = kagglehub.dataset_download("ashwingupta3012/human-faces")
 # print("Path to dataset files:", path)
 # # Move dataset to datasets folder
@@ -62,20 +62,6 @@ ALL_METHODS: List[str] = [
     "pnp_drunet",
     "pnp_diffbir",
 ]
-
-#: Methods available for each task (keeps the inpaint-only pnp_diffbir scoped).
-TASK_METHODS: Dict[str, List[str]] = {
-    "inpaint": [
-        "diffpir",
-        "dps_y0",
-        "dps_yt",
-        "pnp_gaussian",
-        "pnp_drunet",
-        "pnp_diffbir",
-    ],
-    "deblur": ["diffpir", "dps_y0", "dps_yt", "pnp_gaussian", "pnp_drunet"],
-    "sr": ["diffpir", "dps_y0", "dps_yt", "pnp_gaussian", "pnp_drunet"],
-}
 
 #: YAML config file for each task.
 TASK_CONFIG: Dict[str, str] = {
@@ -292,7 +278,7 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--output",
-        default="results/experiments.csv",
+        default="results_long_run/experiments.csv",
         help="Output CSV path.",
     )
     p.add_argument(
@@ -342,14 +328,14 @@ def main() -> None:
     # ── build combo list ───────────────────────────────────────────────────
     combos: List[Tuple[str, str]] = []
     for task in args.tasks:
-        valid_methods = TASK_METHODS[task]
         for method in args.methods:
-            if method in valid_methods:
+            if method in ALL_METHODS:
                 combos.append((task, method))
 
     # optionally skip already-done combos
     if args.skip_existing:
         completed = _read_completed_combos(args.output)
+        print("completed: ", completed)
         if completed:
             logging.info("Skipping %d already-completed combo(s)", len(completed))
         combos = [(t, m) for t, m in combos if (t, m) not in completed]

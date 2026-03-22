@@ -1,7 +1,6 @@
 diffpir:
   task: sr
   seed: 42
-
   noise_level_img: 0.05 # 12.75 / 255
   noise_level_model: 0.05
   model_name: diffusion_ffhq_10m
@@ -10,10 +9,8 @@ diffpir:
   iter_num: 100
   iter_num_U: 1
   batch_size: 16
-
   save_L: true
   save_E: true
-
   lambda_: 1.0
   zeta: 0.1
   sub_1_analytic: true
@@ -26,24 +23,19 @@ diffpir:
   guidance_scale: 1.0
   n_channels: 3
   cwd: ""
-
   calc_LPIPS: true
   beta_start: 0.0001
   beta_end: 0.02
-
-  # sr
   sf: 4
-  sr_mode: blur # blur | cubic
+  sr_mode: blur
   classical_degradation: false
-  inIter: 1 # IBP inner iterations (cubic mode only)
-  gamma: 0.01 # IBP step size (cubic mode only)
-
+  inIter: 1
+  gamma: 0.01
 
 dps_y0:
   task: sr
   name: dps_y0
   seed: 42
-
   noise_level_img: 0.05
   noise_level_model: 0.05
   model_name: diffusion_ffhq_10m
@@ -54,83 +46,82 @@ dps_y0:
   save_L: true
   save_E: true
   output_root: "outputs"
-
-  # Core Method Configs
   generate_mode: DPS_y0
-  lambda_: 0.1 # Controls the gradient step size (zeta_t) for DPS
+  lambda_: 0.1
   zeta: 0.0
   n_channels: 3
   cwd: ""
-
   calc_LPIPS: true
   sf: 4
   sr_mode: blur # blur | cubic
   classical_degradation: false
-  inIter: 1 
-  gamma: 0.01 
-
+  inIter: 1
+  gamma: 0.01
 
 dps_yt:
   task: sr
   name: dps_yt
   seed: 42
-
   noise_level_img: 0.05
   noise_level_model: 0.05
   model_name: diffusion_ffhq_10m
   testset_name: demo_test
   num_train_timesteps: 1000
   batch_size: 16
-
   save_L: true
   save_E: true
   output_root: "outputs"
-
-  # Core Method Configs
   generate_mode: DPS_yt
-  lambda_: 0.1 # Controls the gradient step size (zeta_t) for DPS
+  lambda_: 0.1
   zeta: 0.0
   n_channels: 3
   cwd: ""
-
   calc_LPIPS: true
   sf: 4
   sr_mode: blur # blur | cubic
   classical_degradation: false
-  inIter: 1 
+  inIter: 1
   gamma: 0.01
-
 
 pnp_drunet:
   task: sr
   name: pnp_drunet
   generate_mode: pnp_drunet
-
   lambda_: 1.0
   zeta: 0.0
   sf: 4
-
-  # Degradation (kept consistent with DiffPIR SR config)
   noise_level_img: 0.05
   sr_mode: blur
   classical_degradation: false
   inIter: 1
   gamma: 0.01
 
-  # PnP hyper-parameters
   denoiser: drunet
-  # More iterations let the logspace annealing (49/255 → denoiser_sigma) complete.
   num_iters: 100
-  # Lower terminal sigma → DRUNet barely denoises at the end → rho_final ≈ 25
-  # → data step dominates at high freq → sharper SR reconstruction.
-  # (DPIR default denoiser_sigma = noise_level_img = 0.05 gives rho_final = 1,
-  # which is too weak to sharpen a 4× upsampled image.)
   denoiser_sigma: 0.01
   gaussian_kernel_size: 5
   gaussian_sigma: 1.0
   drunet_weights_path: ""
+  calc_LPIPS: true
+  save_L: true
+  save_E: true
+  clamp: true
+  output_root: "outputs"
 
-  # Output and metrics
+pnp_diffbir:
+  task: sr
+  name: pnp_diffbir
+  generate_mode: pnp_diffbir
+
+  lambda_: 1.0
+  zeta: 0.0
+  sf: 4
+
+  denoiser: diffbir
+  num_iters: 20
+  denoiser_sigma: 0.05
+  diffbir_weights_path: ""
+
   calc_LPIPS: true
   save_L: true
   save_E: true
@@ -141,30 +132,19 @@ pnp_gaussian:
   task: sr
   name: pnp_gaussian
   generate_mode: pnp_gaussian
-
   lambda_: 1.0
   zeta: 0.0
   sf: 4
-
-  # Degradation (kept consistent with DiffPIR SR config)
   noise_level_img: 0.05
   sr_mode: blur
   classical_degradation: false
   inIter: 1
   gamma: 0.01
-
-  # PnP hyper-parameters
   denoiser: gaussian
   num_iters: 100
-  # Keep denoiser_sigma at noise_level_img; Gaussian can't recover HF so large
-  # rho_final would only add Wiener ringing without improving sharpness.
   denoiser_sigma: 0.05
   gaussian_kernel_size: 5
-  # Lighter Gaussian kernel per step (0.5 vs 1.0) so the data step has more
-  # room to push energy back into high frequencies each iteration.
   gaussian_sigma: 0.5
-
-  # Output and metrics
   calc_LPIPS: true
   save_L: true
   save_E: true
