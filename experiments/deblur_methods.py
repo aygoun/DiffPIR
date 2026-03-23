@@ -944,6 +944,6 @@ def generate_deblurred_inputs(
             util.imsave(util.single2uint(img_L), out_path)
             logger.info("Saved blurred image to %s", out_path)
 
-        result[img_path] = DegradedInput(degraded_path=out_path)
+        result[os.path.basename(img_path)] = DegradedInput(degraded_path=out_path)
 
     return result
