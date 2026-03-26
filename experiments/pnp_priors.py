@@ -45,7 +45,7 @@ class GaussianDenoiser:
         return F.conv2d(x, kernel, padding=radius, groups=x.shape[1])
 
 
-# Hugging Face DRUNet (perckle/DPIR) – used when no local weights path is given.
+# Hugging Face DRUNet
 HF_DRUNET_REPO = "perckle/DPIR"
 HF_DRUNET_COLOR_FILE = "drunet_color.safetensors"
 
@@ -164,38 +164,26 @@ _DIFFBIR_SWINIR_KWARGS: dict = dict(
 def _remap_diffbir_keys(state: dict) -> dict:
     """
     Remap keys from the DiffBIR checkpoint format to our SwinIR layout.
-
-    The official checkpoint (general_swinir_v1.ckpt) was saved with
-    DataParallel and a slightly different module layout:
-      - All keys are prefixed with "module."
-      - conv_first is a Sequential([PixelUnshuffle, Conv2d]), so weights sit
-        at "conv_first.1.*"; our model uses a bare Conv2d at "conv_first.*".
-      - RSTB stores transformer blocks under "residual_group.blocks.N.*";
-        our ModuleList names them "residual_group.N.*" directly.
-      - MLP layers are named "mlp.fc1" / "mlp.fc2"; our nn.Sequential uses
-        integer indices "mlp.0" / "mlp.3".
-      - "attn_mask" buffers are stored in the checkpoint but our implementation
-        computes them dynamically at runtime, so we skip them.
     """
     import re
 
     new_state: dict = {}
     for k, v in state.items():
-        # 1. Strip DataParallel wrapper prefix
+        # Strip DataParallel wrapper prefix
         if k.startswith("module."):
             k = k[len("module.") :]
 
-        # 2. conv_first: Sequential[PixelUnshuffle(no params), Conv2d] → bare Conv2d
+        # conv_first: Sequential[PixelUnshuffle(no params), Conv2d] → bare Conv2d
         k = k.replace("conv_first.1.", "conv_first.")
 
-        # 3. RSTB residual_group.blocks.N.* → residual_group.N.*
+        # RSTB residual_group.blocks.N.* → residual_group.N.*
         k = re.sub(r"(layers\.\d+\.residual_group\.)blocks\.(\d+)\.", r"\1\2.", k)
 
-        # 4. MLP fc1/fc2 → Sequential indices 0/3
+        # MLP fc1/fc2 → Sequential indices 0/3
         k = k.replace(".mlp.fc1.", ".mlp.0.")
         k = k.replace(".mlp.fc2.", ".mlp.3.")
 
-        # 5. Drop attn_mask buffers — we compute them dynamically per x_size
+        # Drop attn_mask buffers — we compute them dynamically per x_size
         if k.endswith(".attn_mask"):
             continue
 
@@ -207,7 +195,7 @@ def _load_swinir_weights(
     model: torch.nn.Module, path: str, device: torch.device
 ) -> None:
     state = torch.load(path, map_location=device, weights_only=False)
-    # DiffBIR / BasicSR checkpoints wrap weights under a 'params' key
+    # DiffBIR / BasicSR checkpoints wrap weights under a params key
     if isinstance(state, dict):
         for key in ("params", "params_ema", "state_dict"):
             if key in state:
@@ -221,18 +209,6 @@ def _load_swinir_weights(
 class DiffBIRDenoiser:
     """
     DiffBIR Stage-1 SwinIR blind denoiser.
-
-    Loads pretrained weights from Hugging Face (lxq007/DiffBIR,
-    general_swinir_v1.ckpt) by default.  Set ``weights_path`` to a local
-    .ckpt / .pth file to override.
-
-    The SwinIR inside DiffBIR is a *blind* restorer — it does not receive a
-    noise-level signal.  The ``sigma`` argument in ``__call__`` is accepted for
-    API compatibility with the other denoisers but is not used.
-
-    The model maps an image [B, 3, H, W] ∈ [0, 1] to a cleaned image of the
-    same shape via an internal pixel-unshuffle → transformer → pixel-shuffle
-    pipeline (net scale 1:1).
     """
 
     weights_path: str = ""

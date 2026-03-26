@@ -23,16 +23,14 @@ import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from functools import partial
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 import shutil
 
-# ── ensure project root is on sys.path when invoked directly ────────────────
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 from experiments.common import (
-    DegradedInput,
     ImageResult,
     MethodConfig,
     RunResult,
@@ -46,14 +44,8 @@ from experiments.common import (
 # os.makedirs(os.path.join(_HERE, "datasets"), exist_ok=True)
 # shutil.move(path, os.path.join(_HERE, "datasets", "human-faces"))
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Registry  –  (task, method_key) → (yaml_path, runner_callable)
-# ═══════════════════════════════════════════════════════════════════════════
-
-#: All supported tasks.
 ALL_TASKS: List[str] = ["inpaint", "deblur", "sr"]
 
-#: All supported method keys (pnp_diffbir is inpaint-only).
 ALL_METHODS: List[str] = [
     "diffpir",
     "dps_y0",
@@ -63,7 +55,6 @@ ALL_METHODS: List[str] = [
     "pnp_diffbir",
 ]
 
-#: YAML config file for each task.
 TASK_CONFIG: Dict[str, str] = {
     "inpaint": os.path.join(_HERE, "configs", "inpaint.yaml"),
     "deblur": os.path.join(_HERE, "configs", "deblur.yaml"),
@@ -72,11 +63,7 @@ TASK_CONFIG: Dict[str, str] = {
 
 
 def _build_runner(task: str, method: str):
-    """Return the runner callable for a (task, method) pair.
-
-    Imports are deferred so that the module can be imported cheaply and so
-    that subprocesses only pay the import cost for the modules they need.
-    """
+    """Return the runner callable for a (task, method) pair."""
     if task == "inpaint":
         from experiments import inpaint_methods
 
@@ -86,9 +73,7 @@ def _build_runner(task: str, method: str):
             return partial(inpaint_methods.run_dps_inpaint, mode="DPS_y0")
         if method == "dps_yt":
             return partial(inpaint_methods.run_dps_inpaint, mode="DPS_yt")
-        return (
-            inpaint_methods.run_pnp_inpaint
-        )  # pnp_gaussian / pnp_drunet / pnp_diffbir
+        return inpaint_methods.run_pnp_inpaint
 
     if task == "deblur":
         from experiments import deblur_methods
@@ -99,7 +84,7 @@ def _build_runner(task: str, method: str):
             return partial(deblur_methods.run_dps_deblur, mode="DPS_y0")
         if method == "dps_yt":
             return partial(deblur_methods.run_dps_deblur, mode="DPS_yt")
-        return deblur_methods.run_pnp_deblur  # pnp_gaussian / pnp_drunet
+        return deblur_methods.run_pnp_deblur
 
     if task == "sr":
         from experiments import sr_methods
@@ -110,20 +95,16 @@ def _build_runner(task: str, method: str):
             return partial(sr_methods.run_dps_sr, mode="DPS_y0")
         if method == "dps_yt":
             return partial(sr_methods.run_dps_sr, mode="DPS_yt")
-        return sr_methods.run_pnp_sr  # pnp_gaussian / pnp_drunet
+        return sr_methods.run_pnp_sr
 
     raise ValueError(f"Unknown task {task!r}")
 
-
-# ═══════════════════════════════════════════════════════════════════════════
-# CSV helpers
-# ═══════════════════════════════════════════════════════════════════════════
 
 CSV_FIELDNAMES = ["task", "method", "image_name", "psnr", "psnr_y", "lpips"]
 
 
 def _fmt(val) -> str:
-    """Format a float metric for CSV, returning '' for None / NaN."""
+    """Format a float metric for CSV, returning '' for None or NaN."""
     if val is None:
         return ""
     if isinstance(val, float) and math.isnan(val):
@@ -136,7 +117,7 @@ def _run_result_to_rows(
     method: str,
     run_result: RunResult,
 ) -> List[Dict[str, str]]:
-    """Expand a RunResult into one CSV row per image plus one AVERAGE row."""
+    """Expand a RunResult into one CSV row per image plus one average row."""
     rows = []
     for img_name, img_result in run_result.image_results.items():
         rows.append(
@@ -163,21 +144,12 @@ def _run_result_to_rows(
     return rows
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Per-combo worker  (also used directly in single-process mode)
-# ═══════════════════════════════════════════════════════════════════════════
-
-
 def _run_combo(
     task: str,
     method: str,
     image_paths: List[str],
 ) -> Tuple[str, str, RunResult]:
-    """Run a single (task, method) combination over *image_paths*.
-
-    Returns (task, method, RunResult).  Individual image failures are caught
-    and stored as NaN so that the combo still produces a CSV row.
-    """
+    """Run a single (task, method) combination over image_paths."""
     yaml_path = TASK_CONFIG[task]
     cfg = MethodConfig.load_from_yaml(yaml_path, method)
     runner_fn = _build_runner(task, method)
@@ -199,17 +171,12 @@ def _run_combo(
     return task, method, run_result
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Image-path loading
-# ═══════════════════════════════════════════════════════════════════════════
-
-
 def _collect_image_paths(testset_root: str, max_images: int) -> List[str]:
-    """Return up to *max_images* image paths from *testset_root*."""
+    """Return up to max_images image paths from testset_root."""
     paths = load_image_paths(testset_root)
 
     if not paths:
-        # Try a companion .txt list file (filenames only, one per line)
+        # Try a companion .txt list file
         for fname in sorted(os.listdir(testset_root)):
             if fname.endswith(".txt"):
                 list_path = os.path.join(testset_root, fname)
@@ -223,13 +190,8 @@ def _collect_image_paths(testset_root: str, max_images: int) -> List[str]:
     return paths[:max_images]
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Existing-results reader  (used by --skip_existing)
-# ═══════════════════════════════════════════════════════════════════════════
-
-
 def _read_completed_combos(csv_path: str) -> set:
-    """Return the set of (task, method) pairs that already have an AVERAGE row."""
+    """Return the set of (task, method) pairs that already have an average row."""
     completed = set()
     if not os.path.isfile(csv_path):
         return completed
@@ -239,11 +201,6 @@ def _read_completed_combos(csv_path: str) -> set:
             if row.get("image_name") == "AVERAGE":
                 completed.add((row["task"], row["method"]))
     return completed
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# CLI
-# ═══════════════════════════════════════════════════════════════════════════
 
 
 def _parse_args() -> argparse.Namespace:
@@ -298,11 +255,6 @@ def _parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Main
-# ═══════════════════════════════════════════════════════════════════════════
-
-
 def main() -> None:
     args = _parse_args()
 
@@ -312,7 +264,7 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
 
-    # ── collect image paths ────────────────────────────────────────────────
+    # Collect image paths
     image_paths = _collect_image_paths(args.testset, args.max_images)
     if not image_paths:
         logging.error("No images found under %r", args.testset)
@@ -325,14 +277,14 @@ def main() -> None:
         args.max_images,
     )
 
-    # ── build combo list ───────────────────────────────────────────────────
+    # Build combo list
     combos: List[Tuple[str, str]] = []
     for task in args.tasks:
         for method in args.methods:
             if method in ALL_METHODS:
                 combos.append((task, method))
 
-    # optionally skip already-done combos
+    # Optionally skip already-done combos
     if args.skip_existing:
         completed = _read_completed_combos(args.output)
         print("completed: ", completed)
@@ -358,7 +310,7 @@ def main() -> None:
             args.workers,
         )
 
-    # ── prepare CSV writer ─────────────────────────────────────────────────
+    # Prepare CSV writer
     out_dir = os.path.dirname(os.path.abspath(args.output))
     os.makedirs(out_dir, exist_ok=True)
 
@@ -368,7 +320,7 @@ def main() -> None:
     if not append_mode:
         writer.writeheader()
 
-    # ── run experiments ────────────────────────────────────────────────────
+    # Run experiments
     def _handle_result(task: str, method: str, run_result: RunResult) -> None:
         rows = _run_result_to_rows(task, method, run_result)
         writer.writerows(rows)
@@ -386,7 +338,7 @@ def main() -> None:
     t_start = time.time()
 
     if args.workers <= 1:
-        # ── sequential ──────────────────────────────────────────────────────
+        # Sequential
         for task, method in combos:
             logging.info("→ %s / %s …", task, method)
             t0 = time.time()
@@ -399,7 +351,7 @@ def main() -> None:
                 )
             logging.info("  elapsed %.1f s", time.time() - t0)
     else:
-        # ── parallel via ProcessPoolExecutor ────────────────────────────────
+        # Parallel via ProcessPoolExecutor
         with ProcessPoolExecutor(
             max_workers=args.workers,
             mp_context=multiprocessing.get_context("spawn"),

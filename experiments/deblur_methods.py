@@ -1,8 +1,5 @@
 """
 Deblurring method helpers for experiments.
-
-These functions are intended to mirror the SR helpers from `sr_methods.py`,
-but for the deblurring task.
 """
 
 from __future__ import annotations
@@ -209,12 +206,6 @@ def _build_blur_kernel(
     device: torch.device,
     logger: logging.Logger,
 ) -> np.ndarray:
-    """
-    Build and return the 2-D blur kernel *k* (numpy, float32).
-
-    Mirrors the DIY-kernel branch of `main_ddpir_deblur.py` exactly,
-    including the fixed random seed so all methods see the same blur.
-    """
     if hp.use_DIY_kernel:
         np.random.seed(seed=0)
         if hp.blur_mode == "Gaussian":
@@ -256,11 +247,11 @@ def _make_noisy_observation(
     logger: logging.Logger,
 ) -> Tuple[np.ndarray, torch.Tensor]:
     """
-    Apply circular-convolution blur + AWGN to *img_H*.
+    Apply circular-convolution blur + AWGN to img_H.
 
     Returns:
         img_L : float32 numpy array in [0, 1]  (for saving)
-        y     : (1, C, H, W) torch tensor on *device* in [0, 1]
+        y     : (1, C, H, W) torch tensor on device in [0, 1]
     """
     logger.info("Applying blur and AWGN (σ≈%.4f)", noise_level)
     img_L = ndimage.convolve(img_H, np.expand_dims(k, axis=2), mode="wrap")
@@ -282,9 +273,9 @@ def _load_degraded_obs(
     """
     Load a pre-degraded (blurred) image from disk instead of synthesising it.
 
-    Returns the same tuple as `_make_noisy_observation`:
+    Returns the same tuple as _make_noisy_observation:
         img_L : float32 numpy array in [0, 1]  (for saving)
-        y     : (1, C, H, W) torch tensor on *device* in [0, 1]
+        y     : (1, C, H, W) torch tensor on device in [0, 1]
     """
     logger.info(
         "Loading pre-degraded (blurred) image from %s", degraded_input.degraded_path
@@ -302,8 +293,8 @@ def _compute_lpips(
     device: torch.device,
 ) -> Optional[float]:
     """
-    Compute LPIPS between the estimated image *x_est* ∈ [0,1] and uint8
-    ground-truth *img_H*.  Returns None when *loss_fn_vgg* is None.
+    Compute LPIPS between the estimated image x_est ∈ [0,1] and uint8
+    ground-truth img_H.  Returns None when loss_fn_vgg is None.
     """
     if loss_fn_vgg is None:
         return None
@@ -325,7 +316,7 @@ def _save_outputs(
     save_L: bool,
     logger: logging.Logger,
 ) -> None:
-    """Save the restored and/or LR images under *method_out*."""
+    """Save the restored and/or LR images under method_out."""
     util.mkdir(method_out)
     if save_E:
         out_est = os.path.join(method_out, f"{img_name}_{suffix}{ext}")
@@ -350,11 +341,11 @@ def run_diffpir_deblur(
     """
     Single-image DiffPIR deblurring runner.
 
-    This is a direct, single-image analogue of `main_ddpir_deblur.py`:
+    This is a direct, single-image analogue of main_ddpir_deblur.py:
     - builds the blur kernel and noisy observation from the sharp GT image
     - runs the DiffPIR sampling loop
-    - writes the restored image into an `outputs` sub-folder
-    - returns PSNR and LPIPS wrapped in `ImageResult`
+    - writes the restored image into an outputs sub-folder
+    - returns PSNR and LPIPS wrapped in ImageResult
     """
 
     assert (
@@ -582,7 +573,7 @@ def run_dps_deblur(
     """
     Single-image DPS deblurring runner (to be implemented).
 
-    `mode` should be either "DPS_y0" or "DPS_yt" and controls how the
+    mode should be either "DPS_y0" or "DPS_yt" and controls how the
     data-consistency term is applied in the loop.
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -594,7 +585,7 @@ def run_dps_deblur(
     img_name, ext = os.path.splitext(os.path.basename(img_path))
     logger = _make_logger(f"diffpir_deblur.{img_name}")
 
-    # 1. Noise schedule (Standard sequence)
+    # Noise schedule (Standard sequence)
     beta_start = 0.1 / 1000
     beta_end = 20 / 1000
     betas = np.linspace(beta_start, beta_end, hp.num_train_timesteps, dtype=np.float32)
@@ -605,7 +596,7 @@ def run_dps_deblur(
     sqrt_1m_alphas_cumprod = torch.sqrt(1.0 - alphas_cumprod)
     betabar = 1.0 - alphas_cumprod
 
-    # 2. Model loading (Freezing parameters, but we will require grad on inputs)
+    # Model loading (Freezing parameters, but we will require grad on inputs)
     model_zoo = os.path.join("", "model_zoo")
     model_path = os.path.join(model_zoo, hp.model_name + ".pt")
     model_config = (
@@ -639,7 +630,7 @@ def run_dps_deblur(
 
         loss_fn_vgg = lpips.LPIPS(net="vgg").to(device)
 
-    # 3. Image + degradation loading
+    # Image + degradation loading
     n_channels = 3
     logger.info("Loading ground-truth image from %s", img_path)
     img_H = util.imread_uint(img_path, n_channels=n_channels)
@@ -659,7 +650,7 @@ def run_dps_deblur(
     k_tensor = k_tensor.repeat(3, 1, 1, 1)
 
     def blur_operator(tensor):
-        """Applies circular blur matching the degradation process."""
+        # Applies circular blur matching the degradation process.
         pad_sz = k.shape[0] // 2
         x_pad = torch.nn.functional.pad(
             tensor, (pad_sz, pad_sz, pad_sz, pad_sz), mode="circular"
@@ -685,7 +676,6 @@ def run_dps_deblur(
         # l2 loss depending on mdoe
         if mode == "DPS_y0":
             # Standard DPS: Compare predicted clean image (mapped to [0,1]) to clean measurement
-            # clean image estimation
             xhat = (1.0 / sqrt_alphas_cumprod[t]) * xt - (
                 sqrt_1m_alphas_cumprod[t] / sqrt_alphas_cumprod[t]
             ) * eps
@@ -703,7 +693,7 @@ def run_dps_deblur(
 
         grad_l2 = torch.autograd.grad(outputs=l2, inputs=xt)[0]
 
-        # 5cStandard DDPM backward step (mu)
+        # Standard DDPM backward step (mu)
         mu = (1.0 / torch.sqrt(alphas[t])) * (
             xt - (betas[t] / torch.sqrt(betabar[t])) * eps
         )
@@ -759,7 +749,7 @@ def run_pnp_deblur(
     degraded_input: Optional[DegradedInput] = None,
 ) -> ImageResult:
     """
-    Plug-and-play deblurring runner using DRUNet or another `Denoiser` prior.
+    Plug-and-play deblurring runner using DRUNet or another Denoiser prior.
 
     Uses a gradient-descent data step with the same circular-convolution
     degradation as DiffPIR for fair comparison.
@@ -813,7 +803,7 @@ def run_pnp_deblur(
             kernel_size=int(hp.gaussian_kernel_size), sigma=float(hp.gaussian_sigma)
         )
 
-    # DPIR-style rho/sigma schedule (logspace from modelSigma1 to modelSigma2)
+    # DPIR-style rho/sigma schedule
     sigma_obs = max(0.255 / 255.0, float(deg.noise_level_img))
     model_sigma_2 = (
         float(hp.denoiser_sigma)
@@ -830,7 +820,7 @@ def run_pnp_deblur(
     rhos = [(sigma_obs**2) / (s**2) for s in sigma_schedule]
     rhos = torch.tensor(rhos, device=device, dtype=torch.float32)
 
-    # FFT pre-computation for analytic data step (sf=1 for deblur)
+    # FFT pre-computation for analytic data step
     deblur_sf = 1
     k_tensor = util.single2tensor4(np.expand_dims(k, 2)).to(device)
     FB, FBC, F2B, FBFy = sr.pre_calculate(y, k_tensor, deblur_sf)
@@ -838,11 +828,11 @@ def run_pnp_deblur(
     x = y.clone()
 
     for it in tqdm(range(hp.num_iters), desc="PnP Deblurring"):
-        # Step 1: Data step (analytic FFT solution)
+        # Data step (analytic FFT solution)
         tau = rhos[it].float().repeat(1, 1, 1, 1)
         x = sr.data_solution(x.float(), FB, FBC, F2B, FBFy, tau, deblur_sf)
 
-        # Step 2: Prior (denoiser) step — output of this step feeds back as x
+        # Prior (denoiser) step — output of this step feeds back as x
         sigma_it = float(sigma_schedule[it])
         x = denoiser(x, sigma=sigma_it)
 
@@ -889,38 +879,12 @@ def run_pnp_deblur(
     )
 
 
-# ===========================================================================
-# Degraded image generation
-# ===========================================================================
-
-
 def generate_deblurred_inputs(
     testset_root: str,
     cfg: MethodConfig,
     output_dir: str = "outputs/deblurred",
     overwrite: bool = False,
 ) -> Dict[str, DegradedInput]:
-    """Apply the blur degradation from *cfg* to every image in *testset_root*
-    and save the results to *output_dir*.
-
-    Uses the identical kernel and noise pipeline as the runners, so the saved
-    images are plug-and-play replacements for the internally synthesised
-    observations.
-
-    Args:
-        testset_root: Directory containing the ground-truth images.
-        cfg: A :class:`MethodConfig` for the deblur task (e.g. loaded from
-            ``configs/deblur.yaml``). The blur kernel and noise level are read
-            from ``cfg.extra``.
-        output_dir: Directory where the blurred images will be saved.
-        overwrite: When *False* (default) existing files are left untouched.
-
-    Returns:
-        A ``dict`` mapping each image basename (e.g. ``"69037.png"``) to a
-        :class:`DegradedInput` whose ``degraded_path`` points to the saved
-        blurred image.  Pass this dict directly to :func:`compare_task` as
-        ``degraded_inputs``.
-    """
     hp = _build_hparams_from_cfg(cfg)
     device = torch.device("cpu")
     logger = _make_logger("generate_deblurred")

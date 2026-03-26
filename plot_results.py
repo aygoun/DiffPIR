@@ -1,23 +1,5 @@
 """
-plot_results.py
-
 Read a CSV produced by run_all_experiments.py and generate comparison plots.
-
-Usage
------
-    python plot_results.py --csv results/experiments.csv --output_dir results/plots
-
-    # filter to specific tasks or methods
-    python plot_results.py --tasks inpaint sr --metrics psnr lpips
-
-Outputs (one file each, saved to --output_dir)
--------
-  bar_<task>_psnr.png      – grouped bar chart: methods × avg PSNR per task
-  bar_<task>_lpips.png     – same for LPIPS  (lower is better)
-  bar_<task>_psnr_y.png    – same for PSNR-Y (SR only)
-  scatter_psnr_lpips.png   – PSNR vs LPIPS scatter across all tasks/methods
-  heatmap_psnr.png         – task × method heatmap of avg PSNR
-  heatmap_lpips.png        – task × method heatmap of avg LPIPS
 """
 
 from __future__ import annotations
@@ -30,15 +12,11 @@ from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 
 import matplotlib
+
 matplotlib.use("Agg")  # headless rendering
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Data loading
-# ═══════════════════════════════════════════════════════════════════════════
 
 
 def _parse_float(s: str) -> Optional[float]:
@@ -51,13 +29,7 @@ def _parse_float(s: str) -> Optional[float]:
 
 
 def load_csv(csv_path: str) -> Tuple[List[Dict], Dict[Tuple[str, str], Dict]]:
-    """Load the experiments CSV.
-
-    Returns
-    -------
-    rows : list of per-image dicts
-    averages : {(task, method): {"psnr": float, "psnr_y": float, "lpips": float}}
-    """
+    """Load the experiments CSV."""
     rows: List[Dict] = []
     averages: Dict[Tuple[str, str], Dict] = {}
 
@@ -91,38 +63,34 @@ def load_csv(csv_path: str) -> Tuple[List[Dict], Dict[Tuple[str, str], Dict]]:
     return rows, averages
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Colour / style helpers
-# ═══════════════════════════════════════════════════════════════════════════
-
 _METHOD_COLORS = {
-    "diffpir":     "#2196F3",  # blue
-    "dps_y0":      "#FF9800",  # orange
-    "dps_yt":      "#FF5722",  # deep orange
-    "pnp_gaussian":"#4CAF50",  # green
-    "pnp_drunet":  "#9C27B0",  # purple
+    "diffpir": "#2196F3",  # blue
+    "dps_y0": "#FF9800",  # orange
+    "dps_yt": "#FF5722",  # deep orange
+    "pnp_gaussian": "#4CAF50",  # green
+    "pnp_drunet": "#9C27B0",  # purple
     "pnp_diffbir": "#E91E63",  # pink
 }
 
 _METHOD_LABELS = {
-    "diffpir":      "DiffPIR",
-    "dps_y0":       "DPS-y₀",
-    "dps_yt":       "DPS-yₜ",
+    "diffpir": "DiffPIR",
+    "dps_y0": "DPS-y₀",
+    "dps_yt": "DPS-yₜ",
     "pnp_gaussian": "PnP-Gaussian",
-    "pnp_drunet":   "PnP-DRUNet",
-    "pnp_diffbir":  "PnP-DiffBIR",
+    "pnp_drunet": "PnP-DRUNet",
+    "pnp_diffbir": "PnP-DiffBIR",
 }
 
 _TASK_LABELS = {
     "inpaint": "Inpainting",
-    "deblur":  "Deblurring",
-    "sr":      "Super-Resolution",
+    "deblur": "Deblurring",
+    "sr": "Super-Resolution",
 }
 
 _METRIC_LABELS = {
-    "psnr":   "PSNR (dB)  ↑",
+    "psnr": "PSNR (dB)  ↑",
     "psnr_y": "PSNR-Y (dB)  ↑",
-    "lpips":  "LPIPS  ↓",
+    "lpips": "LPIPS  ↓",
 }
 
 
@@ -137,10 +105,6 @@ def _method_label(method: str) -> str:
 def _task_label(task: str) -> str:
     return _TASK_LABELS.get(task, task)
 
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Plot helpers
-# ═══════════════════════════════════════════════════════════════════════════
 
 plt.rcParams.update(
     {
@@ -163,11 +127,6 @@ def _save(fig: plt.Figure, path: str) -> None:
     print(f"  saved → {path}")
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Per-task bar charts
-# ═══════════════════════════════════════════════════════════════════════════
-
-
 def plot_bar(
     averages: Dict[Tuple[str, str], Dict],
     task: str,
@@ -175,7 +134,7 @@ def plot_bar(
     methods: List[str],
     output_dir: str,
 ) -> None:
-    """Grouped bar chart of *metric* across *methods* for a single *task*."""
+    """Grouped bar chart of metric across methods for a single task."""
     values = []
     labels = []
     colors = []
@@ -218,11 +177,6 @@ def plot_bar(
 
     fig.tight_layout()
     _save(fig, os.path.join(output_dir, f"bar_{task}_{metric}.png"))
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# PSNR vs LPIPS scatter
-# ═══════════════════════════════════════════════════════════════════════════
 
 
 def plot_scatter_psnr_lpips(
@@ -277,7 +231,8 @@ def plot_scatter_psnr_lpips(
             if (task, method) in averages and method not in seen_methods:
                 seen_methods.add(method)
                 patch = plt.Line2D(
-                    [0], [0],
+                    [0],
+                    [0],
                     marker="o",
                     color="w",
                     markerfacecolor=_method_color(method),
@@ -291,7 +246,8 @@ def plot_scatter_psnr_lpips(
     for task in tasks:
         mk = task_markers.get(task, "D")
         patch = plt.Line2D(
-            [0], [0],
+            [0],
+            [0],
             marker=mk,
             color="w",
             markerfacecolor="#888",
@@ -306,11 +262,6 @@ def plot_scatter_psnr_lpips(
     _save(fig, os.path.join(output_dir, "scatter_psnr_lpips.png"))
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Heatmaps  (task × method)
-# ═══════════════════════════════════════════════════════════════════════════
-
-
 def plot_heatmap(
     averages: Dict[Tuple[str, str], Dict],
     tasks: List[str],
@@ -320,10 +271,7 @@ def plot_heatmap(
 ) -> None:
     """Heatmap with tasks as rows and methods as columns."""
     # filter to methods that actually appear in averages
-    active_methods = [
-        m for m in methods
-        if any((t, m) in averages for t in tasks)
-    ]
+    active_methods = [m for m in methods if any((t, m) in averages for t in tasks)]
     if not active_methods or not tasks:
         return
 
@@ -337,14 +285,20 @@ def plot_heatmap(
     is_lpips = metric == "lpips"
     cmap = "RdYlGn_r" if is_lpips else "RdYlGn"
 
-    fig, ax = plt.subplots(figsize=(max(6, len(active_methods) * 1.4), max(3, len(tasks) * 1.1)))
+    fig, ax = plt.subplots(
+        figsize=(max(6, len(active_methods) * 1.4), max(3, len(tasks) * 1.1))
+    )
     im = ax.imshow(grid, cmap=cmap, aspect="auto")
 
     ax.set_xticks(np.arange(len(active_methods)))
-    ax.set_xticklabels([_method_label(m) for m in active_methods], rotation=30, ha="right")
+    ax.set_xticklabels(
+        [_method_label(m) for m in active_methods], rotation=30, ha="right"
+    )
     ax.set_yticks(np.arange(len(tasks)))
     ax.set_yticklabels([_task_label(t) for t in tasks])
-    ax.set_title(f"Average {_METRIC_LABELS[metric]} — all tasks × methods", fontweight="bold")
+    ax.set_title(
+        f"Average {_METRIC_LABELS[metric]} — all tasks × methods", fontweight="bold"
+    )
 
     # annotate cells
     for i in range(len(tasks)):
@@ -352,17 +306,20 @@ def plot_heatmap(
             val = grid[i, j]
             if not np.isnan(val):
                 text = f"{val:.3f}" if is_lpips else f"{val:.2f}"
-                ax.text(j, i, text, ha="center", va="center", fontsize=9, fontweight="bold",
-                        color="black")
+                ax.text(
+                    j,
+                    i,
+                    text,
+                    ha="center",
+                    va="center",
+                    fontsize=9,
+                    fontweight="bold",
+                    color="black",
+                )
 
     plt.colorbar(im, ax=ax, label=_METRIC_LABELS[metric], shrink=0.8)
     fig.tight_layout()
     _save(fig, os.path.join(output_dir, f"heatmap_{metric}.png"))
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Per-image PSNR line plot  (one subplot per task)
-# ═══════════════════════════════════════════════════════════════════════════
 
 
 def plot_per_image_lines(
@@ -373,8 +330,9 @@ def plot_per_image_lines(
     output_dir: str,
 ) -> None:
     """Line plots showing per-image metric values for each task."""
-    # group rows: {task: {method: {img_name: value}}}
-    data: Dict[str, Dict[str, Dict[str, float]]] = defaultdict(lambda: defaultdict(dict))
+    data: Dict[str, Dict[str, Dict[str, float]]] = defaultdict(
+        lambda: defaultdict(dict)
+    )
     for row in rows:
         if row["task"] in tasks and row["method"] in methods:
             val = row.get(metric)
@@ -386,7 +344,8 @@ def plot_per_image_lines(
         return
 
     fig, axes = plt.subplots(
-        1, len(active_tasks),
+        1,
+        len(active_tasks),
         figsize=(5 * len(active_tasks), 4),
         sharey=False,
     )
@@ -395,7 +354,7 @@ def plot_per_image_lines(
 
     for ax, task in zip(axes, active_tasks):
         task_data = data[task]
-        # gather a consistent x-axis (sorted image names)
+        # Gather a consistent x-axis (sorted image names)
         all_imgs = sorted({img for m_data in task_data.values() for img in m_data})
         x = np.arange(len(all_imgs))
 
@@ -432,11 +391,6 @@ def plot_per_image_lines(
     _save(fig, os.path.join(output_dir, f"per_image_{metric}.png"))
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# CLI
-# ═══════════════════════════════════════════════════════════════════════════
-
-
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Plot experiment results from a CSV produced by run_all_experiments.py.",
@@ -462,8 +416,12 @@ def _parse_args() -> argparse.Namespace:
         "--methods",
         nargs="+",
         default=[
-            "diffpir", "dps_y0", "dps_yt",
-            "pnp_gaussian", "pnp_drunet", "pnp_diffbir",
+            "diffpir",
+            "dps_y0",
+            "dps_yt",
+            "pnp_gaussian",
+            "pnp_drunet",
+            "pnp_diffbir",
         ],
         help="Methods to include in plots.",
     )
@@ -490,27 +448,29 @@ def main() -> None:
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # ── bar charts (one per task × metric) ──────────────────────────────────
+    # Bar charts (one per task × metric)
     for task in args.tasks:
         for metric in args.metrics:
             if metric == "psnr_y" and task != "sr":
                 continue  # psnr_y is SR-specific
             plot_bar(averages, task, metric, args.methods, args.output_dir)
 
-    # ── PSNR vs LPIPS scatter ────────────────────────────────────────────────
+    # PSNR vs LPIPS scatter
     if "psnr" in args.metrics and "lpips" in args.metrics:
         plot_scatter_psnr_lpips(averages, args.tasks, args.methods, args.output_dir)
 
-    # ── heatmaps ─────────────────────────────────────────────────────────────
+    # Heatmaps
     for metric in args.metrics:
         if metric == "psnr_y":
             continue  # better shown per-task only
         plot_heatmap(averages, args.tasks, args.methods, metric, args.output_dir)
 
-    # ── per-image line plots ─────────────────────────────────────────────────
+    # Per-image line plots
     for metric in ["psnr", "lpips"]:
         if metric in args.metrics:
-            plot_per_image_lines(rows, args.tasks, args.methods, metric, args.output_dir)
+            plot_per_image_lines(
+                rows, args.tasks, args.methods, metric, args.output_dir
+            )
 
     print(f"\nAll plots written to {args.output_dir!r}")
 

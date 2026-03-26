@@ -1,8 +1,5 @@
 """
 Inpainting method helpers for experiments.
-
-These functions mirror the structure of `deblur_methods.py` but for the
-inpainting task, adapting the logic from `main_ddpir_inpainting.py`.
 """
 
 from __future__ import annotations
@@ -99,7 +96,6 @@ class PnPInpaintHyperParams:
     # drunet
     drunet_weights_path: str = ""
 
-    # diffbir — leave empty to download general_swinir_v1.ckpt from lxq007/DiffBIR automatically
     diffbir_weights_path: str = ""
 
     # output / metrics
@@ -116,7 +112,7 @@ class PnPInpaintHyperParams:
 
 
 def _build_hparams_from_cfg(cfg: MethodConfig) -> DiffPIRInpaintHyperParams:
-    """Create hyper-parameter object, allowing overrides through `cfg.extra`."""
+    """Create hyper-parameter object, allowing overrides through cfg.extra."""
 
     extra: Dict[str, Any] = cfg.extra or {}
     hp = DiffPIRInpaintHyperParams()
@@ -149,7 +145,7 @@ def _build_hparams_from_cfg(cfg: MethodConfig) -> DiffPIRInpaintHyperParams:
 
 
 def _build_pnp_hparams_from_cfg(cfg: MethodConfig) -> PnPInpaintHyperParams:
-    """Create PnP hyper-parameter object, allowing overrides through `cfg.extra`."""
+    """Create PnP hyper-parameter object, allowing overrides through cfg.extra."""
     extra: Dict[str, Any] = cfg.extra or {}
     hp = PnPInpaintHyperParams()
     for key in [
@@ -177,7 +173,7 @@ def _build_pnp_hparams_from_cfg(cfg: MethodConfig) -> PnPInpaintHyperParams:
 
 
 def _make_logger(name: str) -> logging.Logger:
-    """Return a stream-handler logger for *name*, adding a handler only once."""
+    """Return a stream-handler logger for name, adding a handler only once."""
     logger = logging.getLogger(name)
     if not logger.handlers:
         handler = logging.StreamHandler()
@@ -196,9 +192,6 @@ def _build_mask(
 ) -> np.ndarray:
     """
     Return a float32 numpy mask of shape (H, W, C) with values in {0, 1}.
-
-    When `hp.load_mask` is True the mask is loaded from `hp.mask_name`.
-    Otherwise a random/box mask is generated with a fixed seed for reproducibility.
     """
     if hp.load_mask:
         n_channels = img_H.shape[2]
@@ -231,12 +224,7 @@ def _make_inpaint_observation(
     logger: logging.Logger,
 ) -> Tuple[np.ndarray, torch.Tensor, torch.Tensor]:
     """
-    Apply the inpainting mask and AWGN to *img_H*.
-
-    Returns:
-        img_L      : float32 numpy array in [0, 1] (masked, for saving)
-        y          : (1, C, H, W) torch tensor in [-1, 1] (for the diffusion loop)
-        mask_tensor: (1, C, H, W) float32 torch tensor in {0, 1}
+    Apply the inpainting mask and AWGN to img_H.
     """
     logger.info("Applying inpainting mask and AWGN (σ=%.4f)", noise_level)
 
@@ -263,14 +251,6 @@ def _load_degraded_obs(
     """
     Load a pre-degraded (masked) image and its mask from disk instead of
     synthesising them.
-
-    Returns the same tuple as `_make_inpaint_observation`:
-        img_L      : float32 numpy array in [0, 1]  (masked image, for saving)
-        y          : (1, C, H, W) torch tensor on *device* in [-1, 1]
-        mask_tensor: (1, C, H, W) float32 torch tensor in {0, 1}
-
-    Raises:
-        ValueError: when ``degraded_input.mask_path`` is None.
     """
     if degraded_input.mask_path is None:
         raise ValueError(
@@ -304,8 +284,8 @@ def _compute_lpips(
     device: torch.device,
 ) -> Optional[float]:
     """
-    Compute LPIPS between *x_est* ∈ [0, 1] and uint8 ground-truth *img_H*.
-    Returns None when *loss_fn_vgg* is None.
+    Compute LPIPS between x_est ∈ [0, 1] and uint8 ground-truth img_H.
+    Returns None when loss_fn_vgg is None.
     """
     if loss_fn_vgg is None:
         return None
@@ -327,7 +307,7 @@ def _save_outputs(
     save_L: bool,
     logger: logging.Logger,
 ) -> None:
-    """Save the restored and/or masked images under *method_out*."""
+    """Save the restored and/or masked images under method_out."""
     util.mkdir(method_out)
     if save_E:
         out_est = os.path.join(method_out, f"{img_name}_{suffix}{ext}")
@@ -348,31 +328,34 @@ import tempfile
 import IPython
 import matplotlib.pyplot as plt
 
-def viewimage(im, normalize=True,vmin=-1,vmax=1,z=1,order=0,titre='',displayfilename=False):
-    im = im.detach().cpu().permute(2,3,1,0).squeeze()
-    imin= np.array(im).astype(np.float32)
-    channel_axis = 2 if len(im.shape)>2 else None
-    if z!=1:
+
+def viewimage(
+    im, normalize=True, vmin=-1, vmax=1, z=1, order=0, titre="", displayfilename=False
+):
+    im = im.detach().cpu().permute(2, 3, 1, 0).squeeze()
+    imin = np.array(im).astype(np.float32)
+    channel_axis = 2 if len(im.shape) > 2 else None
+    if z != 1:
         from skimage.transform import rescale
+
         imin = rescale(imin, z, order=order, channel_axis=channel_axis)
     if normalize:
         if vmin is None:
             vmin = imin.min()
         if vmax is None:
             vmax = imin.max()
-        if np.abs(vmax-vmin)>1e-10:
-            imin = (imin.clip(vmin,vmax)-vmin)/(vmax-vmin)
+        if np.abs(vmax - vmin) > 1e-10:
+            imin = (imin.clip(vmin, vmax) - vmin) / (vmax - vmin)
         else:
             imin = vmin
     else:
-        imin=imin.clip(0,255)/255
-    imin=(imin*255).astype(np.uint8)
-    filename=tempfile.mktemp(titre+'.png')
+        imin = imin.clip(0, 255) / 255
+    imin = (imin * 255).astype(np.uint8)
+    filename = tempfile.mktemp(titre + ".png")
     if displayfilename:
-        print (filename)
-    plt.imsave(filename, imin, cmap='gray')
+        print(filename)
+    plt.imsave(filename, imin, cmap="gray")
     IPython.display.display(IPython.display.Image(filename))
-
 
 
 def run_diffpir_inpaint(
@@ -380,19 +363,6 @@ def run_diffpir_inpaint(
     cfg: MethodConfig,
     degraded_input: Optional[DegradedInput] = None,
 ) -> ImageResult:
-    """
-    Single-image DiffPIR inpainting runner.
-
-    Mirrors `main_ddpir_inpainting.py` as a clean, single-image function:
-    - generates (or loads) a binary mask
-    - builds the masked/noisy observation *y*
-    - runs the DiffPIR reverse-diffusion loop with the pixel-space
-      closed-form data-consistency update
-    - recovers known pixels from *y* at the end
-    - writes the restored image into an `outputs` sub-folder
-    - returns PSNR and LPIPS wrapped in `ImageResult`
-    """
-
     assert (
         cfg.task == "inpaint"
     ), f"DiffPIR inpaint expects task='inpaint', got {cfg.task!r}"
@@ -613,7 +583,7 @@ def run_dps_inpaint(
     """
     Single-image DPS inpainting runner.
 
-    `mode` should be either "DPS_y0" or "DPS_yt" and controls how the
+    mode should be either "DPS_y0" or "DPS_yt" and controls how the
     data-consistency term is applied in the loop.
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -624,7 +594,7 @@ def run_dps_inpaint(
     img_name, ext = os.path.splitext(os.path.basename(img_path))
     logger = _make_logger(f"dps_inpaint.{img_name}")
 
-    # 1. Noise schedule (Standard sequence)
+    # Noise schedule (Standard sequence)
     beta_start = 0.1 / 1000
     beta_end = 20 / 1000
     betas = np.linspace(beta_start, beta_end, hp.num_train_timesteps, dtype=np.float32)
@@ -635,7 +605,7 @@ def run_dps_inpaint(
     sqrt_1m_alphas_cumprod = torch.sqrt(1.0 - alphas_cumprod)
     betabar = 1.0 - alphas_cumprod
 
-    # 2. Model loading (Safely FREEZING weights to prevent OOM)
+    # Model loading
     model_zoo = os.path.join("", "model_zoo")
     model_path = os.path.join(model_zoo, hp.model_name + ".pt")
     model_config = (
@@ -667,7 +637,7 @@ def run_dps_inpaint(
 
         loss_fn_vgg = lpips.LPIPS(net="vgg").to(device)
 
-    # 3. Image + degradation loading
+    # Image + degradation loading
     n_channels = 3
     logger.info("Loading ground-truth image from %s", img_path)
     img_H = util.imread_uint(img_path, n_channels=n_channels)
@@ -681,36 +651,36 @@ def run_dps_inpaint(
             img_H, mask_np, hp.noise_level_img, device, logger
         )
 
-    # 4. Build Forward Operator (A) for DPS Data Consistency
+    # Build Forward Operator (A) for DPS Data Consistency
     def mask_operator(tensor):
-        """Applies the binary mask to the tensor."""
+        # Applies the binary mask to the tensor.
         return tensor * mask_tensor
 
-    # Initialize x at timestep T
+    # Initialize x at timestep t
     xt = torch.randn_like(y, device=device)
 
     logger.info("Starting DPS reverse diffusion (%d steps)", hp.num_train_timesteps)
 
-    # 5. Reverse Diffusion Loop
+    # Reverse Diffusion Loop
     for i, t in tqdm(
         enumerate(reversed(range(hp.num_train_timesteps))), desc=f"DPS Inpaint {mode}"
     ):
 
-        # CRITICAL: Detach and require grad at the start of EVERY step
+        # Detach and require grad at the start of EVERY step
         xt = xt.detach().requires_grad_()
 
-        # 5a. Unet Prediction
+        # Unet Prediction
         model_out = model(xt, torch.tensor(t, device=device).unsqueeze(0))
         eps = model_out[:, :3, :, :]
 
-        # Calculate predicted clean image (xhat_0)
+        # Predicted clean image (xhat_0)
         xhat = (1.0 / sqrt_alphas_cumprod[t]) * xt - (
             sqrt_1m_alphas_cumprod[t] / sqrt_alphas_cumprod[t]
         ) * eps
 
-        # 5b. Data consistency (L2 Loss)
+        # Data consistency (L2 Loss)
         if mode == "DPS_y0":
-            
+
             l2 = torch.sum((mask_operator(xhat) - y) ** 2)
 
         elif mode == "DPS_yt":
@@ -720,7 +690,7 @@ def run_dps_inpaint(
 
         grad_l2 = torch.autograd.grad(outputs=l2, inputs=xt)[0]
 
-        # 5cStandard DDPM backward step (mu)
+        # Standard DDPM backward step (mu)
         mu = (1.0 / torch.sqrt(alphas[t])) * (
             xt - (betas[t] / torch.sqrt(betabar[t])) * eps
         )
@@ -728,31 +698,13 @@ def run_dps_inpaint(
         # DPS Gradient Correction
         zetat = 0.1 * torch.pow(l2, -0.5)
 
-        # Final backward update combining DDPM, additive noise, and DPS guidance
+        # Final backward update
         xt = (
             mu + torch.sqrt(betas[t]) * torch.randn_like(xt) - zetat * grad_l2
         ).detach()
 
-        # # --- NEW: RePaint-style mask enforcement inside the loop ---
-        # # We need to noise the clean ground truth 'y' to the NEXT step (t-1)
-        # # Note: 'y' is currently in [-1, 1].
-        # if t > 0:
-        #     noise_for_y = torch.randn_like(y)
-        #     y_noisy = (sqrt_alphas_cumprod[t-1] * y) + (sqrt_1m_alphas_cumprod[t-1] * noise_for_y)
-        #     xt = (xt * (1 - mask_tensor)) + (y_noisy * mask_tensor)
-        # else:
-        #     xt = (xt * (1 - mask_tensor)) + (y * mask_tensor)
-
-        # # Display
-        # if i==0 or t%100==0 or t==0:
-        #     print('Iteration:', i, '; Discrete time:', t)
-        #     viewimage(torch.cat((xt, xhat, y), dim=3))
-
-    # 6. Post-processing and Metrics
-    # Standard DPS doesn't forcibly inject the exact known pixels back in, but for best metric performance in inpainting, it is standard practice.
+    # Post-processing and Metrics
     x_final = xt.detach() / 2.0 + 0.5
-    # y_0_1 = y / 2.0 + 0.5
-    # x_final = (x_final * (1 - mask_tensor)) + (y_0_1 * mask_tensor)
     x_0 = x_final.clamp(0.0, 1.0)
 
     logger.info("Reverse diffusion finished for %s", img_name)
@@ -796,12 +748,7 @@ def run_pnp_inpaint(
     degraded_input: Optional[DegradedInput] = None,
 ) -> ImageResult:
     """
-    Plug-and-play inpainting runner using DRUNet or another `Denoiser` prior.
-
-    Uses a DPIR-style HQS iteration with:
-      - Prior step: denoiser (DRUNet or Gaussian)
-      - Data step: closed-form proximal on known pixels
-        x = (mask * y + rho * x_denoised) / (mask + rho)
+    Plug-and-play inpainting runner using DRUNet or another Denoiser prior.
     """
     assert (
         cfg.task == "inpaint"
@@ -862,7 +809,7 @@ def run_pnp_inpaint(
             hp.gaussian_sigma,
         )
 
-    # DPIR-style rho/sigma schedule (logspace from modelSigma1 to modelSigma2)
+    # DPIR-style rho/sigma schedule
     sigma_obs = max(0.255 / 255.0, float(deg.noise_level_img))
     model_sigma_2 = (
         float(hp.denoiser_sigma)
@@ -881,31 +828,26 @@ def run_pnp_inpaint(
     rhos = [(sigma_obs**2) / (s**2) for s in sigma_schedule]
     rhos = torch.tensor(rhos, device=device, dtype=torch.float32)
 
-    # Fill unknown pixels with the mean of known pixels so DRUNet gets
-    # a natural-looking image from the very first iteration rather than an
-    # image with hard zeros in 50 % of pixels.
     x = y.clone()
     unknown_mask = mask_tensor < 0.5
     if unknown_mask.any() and (~unknown_mask).any():
         known_mean = float(y[~unknown_mask].mean())
         x = torch.where(unknown_mask, torch.full_like(x, known_mean), x)
 
-    # For zero (or near-zero) observation noise use a hard constraint:
-    # after each denoiser step we force known pixels exactly back to y.
-    # This avoids rho ≈ 0 letting denoiser artifacts bleed into known pixels.
+    # For zero (or near-zero) observation noise use a hard constraint
     use_hard_constraint = float(deg.noise_level_img) < 1e-6
 
     for it in tqdm(range(hp.num_iters), desc="PnP Inpainting"):
-        # Step 1: Prior (denoiser) step
+        # Prior (denoiser) step
         sigma_it = float(sigma_schedule[it])
         x = denoiser(x, sigma=sigma_it)
 
-        # Step 2: Data step
+        # Data step
         if use_hard_constraint:
-            # Exact replacement of known pixels — equivalent to rho → ∞
+            # Exact replacement of known pixels
             x = x * (1.0 - mask_tensor) + y * mask_tensor
         else:
-            # Soft proximal: x = (mask * y + rho * x) / (mask + rho)
+            # Soft proximal
             rho = rhos[it].float()
             x = (mask_tensor * y + rho * x) / (mask_tensor + rho)
 
@@ -930,7 +872,6 @@ def run_pnp_inpaint(
         f"{lpips_score:.4f}" if lpips_score is not None else "N/A",
     )
 
-    # Save outputs
     extra = cfg.extra or {}
     method_out = os.path.join(extra.get("output_root", "outputs"), "pnp_inpaint")
     suffix = f"pnp_{hp.denoiser}"
@@ -952,20 +893,12 @@ def run_pnp_inpaint(
     )
 
 
-# ===========================================================================
-# Degraded image generation
-# ===========================================================================
-
-
 def generate_inpaint_inputs(
     testset_root: str,
     cfg: MethodConfig,
     output_dir: str = "outputs/masked",
     overwrite: bool = False,
 ) -> Dict[str, DegradedInput]:
-    """Apply the inpainting mask from *cfg* to every image in *testset_root*
-    and save the masked images and their masks to *output_dir*.
-    """
     hp = _build_hparams_from_cfg(cfg)
     device = torch.device("cpu")
     logger = _make_logger("generate_inpaint")
@@ -1004,11 +937,7 @@ def _build_mask_boxes(
     img_H: np.ndarray,
     logger: logging.Logger,
 ) -> np.ndarray:
-    """Build a centered box mask for inpainting.
-
-    Returns a float32 numpy array of shape (H, W, C) with 1.0 for visible
-    pixels and 0.0 inside the centered box region.
-    """
+    """Build a centered box mask for inpainting."""
     H, W, C = img_H.shape
     box_h = int(np.mean(hp.mask_len_range))
     box_w = int(np.mean(hp.mask_len_range))
@@ -1023,7 +952,10 @@ def _build_mask_boxes(
 
     logger.info(
         "Generated centered box mask | box=(%d, %d) | top-left=(%d, %d)",
-        box_h, box_w, t, l,
+        box_h,
+        box_w,
+        t,
+        l,
     )
     return mask
 
@@ -1034,9 +966,6 @@ def generate_inpaint_inputs_boxes(
     output_dir: str = "outputs/masked",
     overwrite: bool = False,
 ) -> Dict[str, DegradedInput]:
-    """Apply the inpainting box mask from *cfg* to every image in *testset_root*
-    and save the masked images and their masks to *output_dir*.
-    """
     hp = _build_hparams_from_cfg(cfg)
     device = torch.device("cpu")
     logger = _make_logger("generate_inpaint")

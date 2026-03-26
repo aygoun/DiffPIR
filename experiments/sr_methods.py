@@ -1,8 +1,5 @@
 """
 Super-resolution method helpers for experiments.
-
-These functions mirror the structure of `deblur_methods.py` but for the
-super-resolution task, adapting the logic from `main_ddpir_sisr.py`.
 """
 
 from __future__ import annotations
@@ -32,6 +29,7 @@ from utils.utils_resizer import Resizer
 
 from .common import DegradedInput, ImageResult, MethodConfig, load_image_paths
 from .pnp_priors import GaussianDenoiser, DRUNetDenoiser, Denoiser, DiffBIRDenoiser
+
 
 @dataclass
 class DiffPIRSRHyperParams:
@@ -219,14 +217,7 @@ def _make_sr_observation(
     logger: logging.Logger,
 ) -> Tuple[np.ndarray, torch.Tensor, torch.Tensor, Any, Any]:
     """
-    Downsample *img_H* to create the LR observation and set up SR operators.
-
-    Returns:
-        img_L      : float32 numpy array in [0, 1] (LR with noise, for saving)
-        y          : (1, C, h, w) torch tensor in [0, 1] (LR for data consistency)
-        x_init     : (1, C, H, W) torch tensor in [-1, 1] (noisy bicubic upsampled init)
-        down_sample: callable for the cubic downsampler (None for blur mode)
-        up_sample  : callable for the cubic upsampler  (None for blur mode)
+    Downsample img_H to create the LR observation and set up SR operators.
     """
     down_sample = None
     up_sample = None
@@ -308,16 +299,11 @@ def _load_degraded_obs(
 ) -> Tuple[np.ndarray, torch.Tensor, np.ndarray, Any, Any]:
     """
     Load a pre-degraded (low-resolution) image from disk instead of synthesising it.
-
-    Returns the same tuple as `_make_sr_observation`:
-        img_L      : float32 numpy array in [0, 1] (LR image, for saving)
-        y          : (1, C, h, w) torch tensor on *device* in [0, 1]
-        x_np       : float32 numpy array at HR size (bicubic-upsampled LR, for init)
-        down_sample: cubic downsampler callable, or None when sr_mode != "cubic"
-        up_sample  : cubic upsampler callable, or None when sr_mode != "cubic"
     """
     logger.info("Loading pre-degraded (LR) image from %s", degraded_input.degraded_path)
-    img_L = util.uint2single(util.imread_uint(degraded_input.degraded_path, n_channels=3))
+    img_L = util.uint2single(
+        util.imread_uint(degraded_input.degraded_path, n_channels=3)
+    )
     y = util.single2tensor4(img_L).to(device)
 
     h_lr, w_lr = img_L.shape[:2]
@@ -343,8 +329,8 @@ def _compute_lpips(
     device: torch.device,
 ) -> Optional[float]:
     """
-    Compute LPIPS between *x_est* ∈ [0, 1] and uint8 ground-truth *img_H*.
-    Returns None when *loss_fn_vgg* is None.
+    Compute LPIPS between x_est ∈ [0, 1] and uint8 ground-truth img_H.
+    Returns None when loss_fn_vgg is None.
     """
     if loss_fn_vgg is None:
         return None
@@ -367,7 +353,7 @@ def _save_outputs(
     save_L: bool,
     logger: logging.Logger,
 ) -> None:
-    """Save the restored and/or LR images under *method_out*."""
+    """Save the restored and/or LR images under method_out."""
     util.mkdir(method_out)
     if save_E:
         out_est = os.path.join(method_out, f"{img_name}_x{sf}_{suffix}{ext}")
@@ -379,11 +365,6 @@ def _save_outputs(
         logger.info("Saved LR image to %s", out_lr)
 
 
-# ===========================================================================
-# Public method runners
-# ===========================================================================
-
-
 def run_diffpir_sr(
     img_path: str,
     cfg: MethodConfig,
@@ -391,13 +372,6 @@ def run_diffpir_sr(
 ) -> ImageResult:
     """
     Single-image DiffPIR super-resolution runner.
-
-    Mirrors `main_ddpir_sisr.py` as a clean, single-image function:
-    - loads the HR ground-truth and builds the LR observation
-    - initialises *x* as a noisy bicubic upsampled version of the LR image
-    - runs the DiffPIR reverse-diffusion loop with an FFT Wiener-filter (blur
-      mode) or iterative back-projection (cubic mode) data-consistency step
-    - returns PSNR, PSNR-Y, and LPIPS wrapped in `ImageResult`
     """
 
     assert cfg.task == "sr", f"DiffPIR SR expects task='sr', got {cfg.task!r}"
@@ -667,22 +641,18 @@ def run_dps_sr(
 ) -> ImageResult:
     """
     Single-image DPS SR runner.
-
-    `mode` should be either "DPS_y0" or "DPS_yt" and controls how the
-    data-consistency term is applied in the loop.
     """
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if device.type == "cuda":
         torch.cuda.empty_cache()
 
     sf = cfg.sf
     hp = _build_hparams_from_cfg(cfg)
-    hp.border = sf 
+    hp.border = sf
     img_name, ext = os.path.splitext(os.path.basename(img_path))
     logger = _make_logger(f"dps_sr.{img_name}")
 
-    # 1. Noise schedule
+    # Noise schedule
     beta_start = 0.1 / 1000
     beta_end = 20 / 1000
     betas = np.linspace(beta_start, beta_end, hp.num_train_timesteps, dtype=np.float32)
@@ -693,26 +663,39 @@ def run_dps_sr(
     sqrt_1m_alphas_cumprod = torch.sqrt(1.0 - alphas_cumprod)
     betabar = 1.0 - alphas_cumprod
 
-    # 2. Model loading (Safely FREEZING weights to prevent OOM)
+    # Model loading
     model_zoo = os.path.join("", "model_zoo")
     model_path = os.path.join(model_zoo, hp.model_name + ".pt")
     model_config = (
-        dict(model_path=model_path, num_channels=128, num_res_blocks=1, attention_resolutions="16")
+        dict(
+            model_path=model_path,
+            num_channels=128,
+            num_res_blocks=1,
+            attention_resolutions="16",
+        )
         if hp.model_name == "diffusion_ffhq_10m"
-        else dict(model_path=model_path, num_channels=256, num_res_blocks=2, attention_resolutions="8,16,32")
+        else dict(
+            model_path=model_path,
+            num_channels=256,
+            num_res_blocks=2,
+            attention_resolutions="8,16,32",
+        )
     )
     args = utils_model.create_argparser(model_config).parse_args([])
-    model, diffusion = create_model_and_diffusion(**args_to_dict(args, model_and_diffusion_defaults().keys()))
+    model, diffusion = create_model_and_diffusion(
+        **args_to_dict(args, model_and_diffusion_defaults().keys())
+    )
     model.load_state_dict(torch.load(args.model_path, map_location="cpu"))
     model = model.to(device)
-    model.eval()  
+    model.eval()
 
     loss_fn_vgg = None
     if hp.calc_LPIPS:
         import lpips
+
         loss_fn_vgg = lpips.LPIPS(net="vgg").to(device)
 
-    # 3. Image + degradation loading
+    # Image + degradation loading
     n_channels = 3
     logger.info("Loading ground-truth image from %s", img_path)
     img_H = util.imread_uint(img_path, n_channels=n_channels)
@@ -724,21 +707,33 @@ def run_dps_sr(
             degraded_input, img_H, sf, hp, device, logger
         )
     else:
-        img_L, y, x_np, down_sample, up_sample = _make_sr_observation(img_H, k, sf, hp, device, logger)
+        img_L, y, x_np, down_sample, up_sample = _make_sr_observation(
+            img_H, k, sf, hp, device, logger
+        )
 
     # Scale LR observation y to [-1, 1]
     y_scaled = y * 2.0 - 1.0
 
-    # 4. Build Forward Operator (A)
+    # Build Forward Operator (A)
     if hp.sr_mode == "blur":
         # Pure spatial differentiable blur + strided downsample
-        k_tensor = torch.tensor(k, device=device, dtype=torch.float32).unsqueeze(0).unsqueeze(0).repeat(3, 1, 1, 1)
+        k_tensor = (
+            torch.tensor(k, device=device, dtype=torch.float32)
+            .unsqueeze(0)
+            .unsqueeze(0)
+            .repeat(3, 1, 1, 1)
+        )
         pad_sz = k.shape[0] // 2
+
         def forward_operator(tensor):
-            x_pad = torch.nn.functional.pad(tensor, (pad_sz, pad_sz, pad_sz, pad_sz), mode="circular")
+            x_pad = torch.nn.functional.pad(
+                tensor, (pad_sz, pad_sz, pad_sz, pad_sz), mode="circular"
+            )
             # Convolution with stride effectively combines blur and downsampling
             return torch.nn.functional.conv2d(x_pad, k_tensor, stride=sf, groups=3)
+
     elif hp.sr_mode == "cubic":
+
         def forward_operator(tensor):
             return down_sample(tensor)
 
@@ -748,39 +743,49 @@ def run_dps_sr(
 
     logger.info("Starting DPS reverse diffusion (%d steps)", hp.num_train_timesteps)
 
-    # 5. Reverse Diffusion Loop
-    for i, t in tqdm(enumerate(reversed(range(hp.num_train_timesteps))), desc=f"DPS SR x{sf} {mode}"):
-        
-        # CRITICAL: Detach and require grad at the start of EVERY step
+    # Reverse Diffusion Loop
+    for i, t in tqdm(
+        enumerate(reversed(range(hp.num_train_timesteps))), desc=f"DPS SR x{sf} {mode}"
+    ):
+
+        # Detach and require grad at the start of EVERY step
         xt = xt.detach().requires_grad_()
 
-        # 5a. Unet Prediction
+        # Unet Prediction
         model_out = model(xt, torch.tensor(t, device=device).unsqueeze(0))
         eps = model_out[:, :3, :, :]
 
-        # 5b. Data consistency (L2 Loss)
+        # Data consistency (L2 Loss)
         if mode == "DPS_y0":
             # Calculate predicted clean image (xhat_0)
-            xhat = (1.0 / sqrt_alphas_cumprod[t]) * xt - (sqrt_1m_alphas_cumprod[t] / sqrt_alphas_cumprod[t]) * eps
+            xhat = (1.0 / sqrt_alphas_cumprod[t]) * xt - (
+                sqrt_1m_alphas_cumprod[t] / sqrt_alphas_cumprod[t]
+            ) * eps
             l2 = torch.sum((forward_operator(xhat) - y_scaled) ** 2)
-            
+
         elif mode == "DPS_yt":
             noise_y = forward_operator(eps.detach())
-            y_t = (sqrt_alphas_cumprod[t] * y_scaled) + (sqrt_1m_alphas_cumprod[t] * noise_y)
+            y_t = (sqrt_alphas_cumprod[t] * y_scaled) + (
+                sqrt_1m_alphas_cumprod[t] * noise_y
+            )
             l2 = torch.sum((forward_operator(xt) - y_t) ** 2)
 
         grad_l2 = torch.autograd.grad(outputs=l2, inputs=xt)[0]
 
-        # 5cStandard DDPM backward step (mu)
-        mu = (1.0 / torch.sqrt(alphas[t])) * (xt - (betas[t] / torch.sqrt(betabar[t])) * eps)
+        # Standard DDPM backward step (mu)
+        mu = (1.0 / torch.sqrt(alphas[t])) * (
+            xt - (betas[t] / torch.sqrt(betabar[t])) * eps
+        )
 
         # DPS Gradient Correction
         zetat = 0.1 * torch.pow(l2, -0.5)
 
         # Final backward update combining DDPM, additive noise, and DPS guidance
-        xt = (mu + torch.sqrt(betas[t]) * torch.randn_like(xt) - zetat * grad_l2).detach()
+        xt = (
+            mu + torch.sqrt(betas[t]) * torch.randn_like(xt) - zetat * grad_l2
+        ).detach()
 
-    # 6. Post-processing and Metrics
+    # Post-processing and Metrics
     x_0 = xt.detach() / 2.0 + 0.5
     x_0 = x_0.clamp(0.0, 1.0)
 
@@ -793,14 +798,37 @@ def run_dps_sr(
     psnr_y = util.calculate_psnr(img_E_y, img_H_y, border=hp.border)
     lpips_score = _compute_lpips(loss_fn_vgg, x_0, img_H, device)
 
-    logger.info("Results | img=%s | PSNR=%.3f dB | PSNR-Y=%.3f dB | LPIPS=%s", img_name, psnr, psnr_y, f"{lpips_score:.4f}" if lpips_score is not None else "N/A")
+    logger.info(
+        "Results | img=%s | PSNR=%.3f dB | PSNR-Y=%.3f dB | LPIPS=%s",
+        img_name,
+        psnr,
+        psnr_y,
+        f"{lpips_score:.4f}" if lpips_score is not None else "N/A",
+    )
 
     extra = cfg.extra or {}
     method_out = os.path.join(extra.get("output_root", "outputs"), f"dps_{mode}_sr")
-    _save_outputs(img_E, img_L, method_out, img_name, ext, sf, f"dps_{mode}", hp.save_E, hp.save_L, logger)
+    _save_outputs(
+        img_E,
+        img_L,
+        method_out,
+        img_name,
+        ext,
+        sf,
+        f"dps_{mode}",
+        hp.save_E,
+        hp.save_L,
+        logger,
+    )
     out_est = os.path.join(method_out, f"{img_name}_x{sf}_dps_{mode}{ext}")
 
-    return ImageResult(psnr=float(psnr), psnr_y=float(psnr_y), image_path=img_path, lpips=lpips_score, output_path=out_est)
+    return ImageResult(
+        psnr=float(psnr),
+        psnr_y=float(psnr_y),
+        image_path=img_path,
+        lpips=lpips_score,
+        output_path=out_est,
+    )
 
 
 def run_pnp_sr(
@@ -809,13 +837,7 @@ def run_pnp_sr(
     degraded_input: Optional[DegradedInput] = None,
 ) -> ImageResult:
     """
-    Plug-and-play super-resolution runner using DRUNet or another `Denoiser` prior.
-
-    Uses a DPIR-style HQS iteration with:
-      - Prior step: DRUNet (or Gaussian) denoiser on the HR estimate
-      - Data step (blur mode): analytic FFT Wiener-filter solution via
-        `sr.pre_calculate` / `sr.data_solution` — identical to DiffPIR SR
-      - Data step (cubic mode): iterative back-projection (IBP)
+    Plug-and-play super-resolution runner using DRUNet or another Denoiser prior.
     """
     assert cfg.task == "sr", f"PnP SR expects task='sr', got {cfg.task!r}"
 
@@ -839,7 +861,7 @@ def run_pnp_sr(
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Image and degraded observation (same pipeline as DiffPIR for fair comparison)
+    # Image and degraded observation
     n_channels = 3
     logger.info("Loading ground-truth image from %s", img_path)
     img_H = util.imread_uint(img_path, n_channels=n_channels)
@@ -862,7 +884,7 @@ def run_pnp_sr(
             img_H, k, sf, deg, device, logger
         )
 
-    # Denoiser selection
+    # Denoiser
     denoiser: Denoiser
     if hp.denoiser.lower() == "drunet":
         denoiser = DRUNetDenoiser(weights_path=str(hp.drunet_weights_path))
@@ -981,38 +1003,12 @@ def run_pnp_sr(
     )
 
 
-# ===========================================================================
-# Degraded image generation
-# ===========================================================================
-
-
 def generate_sr_inputs(
     testset_root: str,
     cfg: MethodConfig,
     output_dir: str = "outputs/lr",
     overwrite: bool = False,
 ) -> Dict[str, DegradedInput]:
-    """Downsample every image in *testset_root* to create LR observations and
-    save them to *output_dir*.
-
-    Uses the identical downsampling pipeline (blur or cubic mode, scale factor,
-    noise level) as the runners, so the saved images are plug-and-play
-    replacements for the internally synthesised LR observations.
-
-    Args:
-        testset_root: Directory containing the ground-truth images.
-        cfg: A :class:`MethodConfig` for the SR task (e.g. loaded from
-            ``configs/sr.yaml``).  The scale factor, SR mode, and noise level
-            are read from ``cfg.sf`` and ``cfg.extra``.
-        output_dir: Directory where the LR images will be saved.
-        overwrite: When *False* (default) existing files are left untouched.
-
-    Returns:
-        A ``dict`` mapping each image basename (e.g. ``"69037.png"``) to a
-        :class:`DegradedInput` whose ``degraded_path`` points to the saved LR
-        image.  Pass this dict directly to :func:`compare_task` as
-        ``degraded_inputs``.
-    """
     sf = cfg.sf
     hp = _build_hparams_from_cfg(cfg)
     device = torch.device("cpu")
